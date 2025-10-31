@@ -1,0 +1,14 @@
+pygithub/
+    chromadb_embeddings/ (not save here anything)
+    github_repos/ (not save here anything)
+    repos_docs/ (not save here anything)
+
+    data/
+        github_repos/ (download repo here)
+        chromadb_embeddings/ (Creating Embeddings here here)
+
+    repos_docs2/ (Gnerated docs)
+
+    repo_doc_metadata.json
+    last_run.json
+

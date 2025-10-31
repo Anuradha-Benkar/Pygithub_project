@@ -1,0 +1,44 @@
+# GitHub access
+PyGithub==2.5.0
+GitPython==3.1.43
+
+# Environment variables
+python-dotenv==1.0.1
+
+# LangChain - Updated to latest compatible versions
+langchain==0.3.27
+langchain-community==0.3.30
+langchain-core==0.3.78
+langchain-groq==0.3.8
+langchain-huggingface==0.3.1
+langchain-text-splitters==0.3.11
+langchain-qdrant==0.2.0
+langchain-chroma==0.2.6
+langchain-google-genai==2.1.12
+langchain-ollama==0.3.10
+
+# Embeddings and Vector Store
+sentence-transformers==5.1.1
+qdrant-client==1.15.1
+
+# LangGraph - Updated to latest versions
+langgraph==0.6.10
+langgraph-checkpoint==2.1.2
+langgraph-prebuilt==0.6.4
+
+# Utilities
+pydantic==2.11.9
+pydantic-settings==2.11.0
+tqdm==4.67.1
+jsonschema==4.25.1
+IPython==9.6.0
+
+# Web framework
+streamlit==1.50.0
+uvicorn==0.37.0
+requests==2.32.5
+
+# Additional required packages
+numpy>=2.0.0,<2.3.0
+protobuf>=6.31.1,<7.0.0
+grpcio-tools>=1.76.0  # Add this line

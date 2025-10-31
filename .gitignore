@@ -1,0 +1,59 @@
+# ===================================
+# Python general ignores
+# ===================================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+*.sqlite3
+*.db
+*.DS_Store
+
+# ===================================
+# Virtual environments
+# ===================================
+venv/
+venv-selenium/
+.env/
+
+# ===================================
+# Environment & secrets
+# ===================================
+.env
+config.py   # if it contains API keys or tokens
+
+# ===================================
+# OS / Editor specific
+# ===================================
+.vscode/
+.idea/
+*.swp
+*.bak
+
+# ===================================
+# LangGraph / Qdrant generated files
+# ===================================
+last_run.json
+repo_doc_metadata.json
+qdrant_qa_test.py
+test_qdrant.py
+test_setup.py
+
+
+# ===================================
+# Data folders (Generated content)
+# ===================================
+data/github_repos/
+data/repos_docs/
+repos_docs2/
+data/chromadb_embedding/
+repos_docs/
+repos_docs2/
+data/
+# ===================================
+# Cache / temp / test outputs
+# ===================================
+*.tmp
+*.cache
+*.test
