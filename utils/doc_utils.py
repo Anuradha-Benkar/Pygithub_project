@@ -1,302 +1,302 @@
-import sys
-import os
+# import sys
+# import os
 
-# from github_repo_processor import GROQ_API_KEY
-from config import GROQ_API_KEY
-sys.path.append('.')
-from IPython.core.interactiveshell import InteractiveShell
-InteractiveShell.ast_node_interactivity = "all"
+# # from github_repo_processor import GROQ_API_KEY
+# from config import GROQ_API_KEY
+# sys.path.append('.')
+# from IPython.core.interactiveshell import InteractiveShell
+# InteractiveShell.ast_node_interactivity = "all"
 
-import subprocess
-import hashlib
-import json
-import time
-from pathlib import Path
-from typing import Dict, TypedDict
-from datetime import datetime
+# import subprocess
+# import hashlib
+# import json
+# import time
+# from pathlib import Path
+# from typing import Dict, TypedDict
+# from datetime import datetime
 
-# LangGraph and LangChain imports
-from langgraph.graph import StateGraph, END
-from langchain_groq import ChatGroq
-from langchain.schema import HumanMessage
-from langchain.prompts import PromptTemplate
+# # LangGraph and LangChain imports
+# from langgraph.graph import StateGraph, END
+# from langchain_groq import ChatGroq
+# from langchain.schema import HumanMessage
+# from langchain.prompts import PromptTemplate
 
-# dotenv import for environment variables
-from dotenv import load_dotenv
+# # dotenv import for environment variables
+# from dotenv import load_dotenv
 
-# GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+# # GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
-if not GROQ_API_KEY:
-    raise ValueError("❌ Missing GITHUB_TOKEN or GROQ_API_KEY in .env file")
+# if not GROQ_API_KEY:
+#     raise ValueError("❌ Missing GITHUB_TOKEN or GROQ_API_KEY in .env file")
 
-# ------------------------------
-# STATE
-# ------------------------------
-class DocumentationState(TypedDict):
-    repo_path: str
-    repo_name: str
-    file_contents: Dict[str, str]
-    initial_documentation: str
-    reviewed_documentation: str
-    final_documentation: str
-    current_step: str
-    error_message: str
+# # ------------------------------
+# # STATE
+# # ------------------------------
+# class DocumentationState(TypedDict):
+#     repo_path: str
+#     repo_name: str
+#     file_contents: Dict[str, str]
+#     initial_documentation: str
+#     reviewed_documentation: str
+#     final_documentation: str
+#     current_step: str
+#     error_message: str
 
 
-# ------------------------------
-# DOC GENERATOR CLASS 
-# ------------------------------
+# # ------------------------------
+# # DOC GENERATOR CLASS 
+# # ------------------------------
+# # class DocumentationGenerator:
+# #     def __init__(self, GROQ_API_K: str):
+# #         self.analyzer_llm = ChatGroq(model="openai/gpt-oss-120b", temperature=0.7)
+# #         self.documenter_llm = ChatGroq(model="llama-3.1-70b-versatile", temperature=0.7)
+# #         self.reviewer_llm = ChatGroq(model="llama-3.1-8b-instant", temperature=0.7)
+
+# #     def read_repository_files(self, repo_path: str) -> Dict[str, str]:
+# #         """Read all relevant files"""
+# #         file_contents = {}
+# #         supported_extensions = {
+# #             '.py', '.js', '.ts', '.java', '.cpp', '.c', '.h',
+# #             '.md', '.txt', '.yml', '.yaml', '.json', '.xml', 
+# #             '.html', '.css', '.jsx', '.tsx'
+# #         }
+# #         repo_path = Path(repo_path)
+# #         all_files = [f for f in repo_path.rglob("*") if f.is_file() and f.suffix in supported_extensions]
+
+# #         total_chars = 0
+# #         for file_path in all_files:
+# #             try:
+# #                 if file_path.stat().st_size > 512*1024: 
+# #                     continue
+# #                 with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+# #                     content = f.read()
+# #                 if len(content) > 20000:
+# #                     continue
+# #                 if total_chars + len(content) > 200000:
+# #                     break
+# #                 file_contents[str(file_path.relative_to(repo_path))] = content
+# #                 total_chars += len(content)
+# #             except Exception as e:
+# #                 print(f"⚠️ Could not read {file_path}: {e}")
+# #         return file_contents
+
 # class DocumentationGenerator:
 #     def __init__(self, GROQ_API_K: str):
-#         self.analyzer_llm = ChatGroq(model="openai/gpt-oss-120b", temperature=0.7)
-#         self.documenter_llm = ChatGroq(model="llama-3.1-70b-versatile", temperature=0.7)
-#         self.reviewer_llm = ChatGroq(model="llama-3.1-8b-instant", temperature=0.7)
+#         self.analyzer_llm = ChatGroq(
+#             model="llama-3.3-70b-versatile", 
+#             api_key=GROQ_API_K,
+#             temperature=0.7
+#         )
+#         self.documenter_llm = ChatGroq(
+#             model="llama-3.3-70b-versatile",
+#             api_key=GROQ_API_K,
+#             temperature=0.7
+#         )
+#         self.reviewer_llm = ChatGroq(
+#             model="llama-3.3-70b-versatile",
+#             api_key=GROQ_API_K,
+#             temperature=0.7
+#         )
 
+
+#         # ✅ NEW FUNCTION - ADD THIS ONE
 #     def read_repository_files(self, repo_path: str) -> Dict[str, str]:
 #         """Read all relevant files"""
 #         file_contents = {}
 #         supported_extensions = {
 #             '.py', '.js', '.ts', '.java', '.cpp', '.c', '.h',
 #             '.md', '.txt', '.yml', '.yaml', '.json', '.xml', 
-#             '.html', '.css', '.jsx', '.tsx'
+#             '.html', '.css', '.jsx', '.tsx', '.go', '.rs', '.rb'
 #         }
 #         repo_path = Path(repo_path)
-#         all_files = [f for f in repo_path.rglob("*") if f.is_file() and f.suffix in supported_extensions]
+        
+#         # Skip common directories
+#         skip_dirs = {'.git', '__pycache__', 'node_modules', 'venv', 'env', '.venv', 'dist', 'build'}
+        
+#         all_files = []
+#         for f in repo_path.rglob("*"):
+#             if f.is_file() and f.suffix in supported_extensions:
+#                 # Check if file is in skip directory
+#                 if any(skip_dir in f.parts for skip_dir in skip_dirs):
+#                     continue
+#                 all_files.append(f)
 
 #         total_chars = 0
 #         for file_path in all_files:
 #             try:
+#                 # Skip large files
 #                 if file_path.stat().st_size > 512*1024: 
 #                     continue
+                    
 #                 with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
 #                     content = f.read()
+                    
+#                 # Skip very long files
 #                 if len(content) > 20000:
 #                     continue
+                    
+#                 # Stop if we've read too much
 #                 if total_chars + len(content) > 200000:
 #                     break
+                    
 #                 file_contents[str(file_path.relative_to(repo_path))] = content
 #                 total_chars += len(content)
+                
 #             except Exception as e:
 #                 print(f"⚠️ Could not read {file_path}: {e}")
+                
 #         return file_contents
 
-class DocumentationGenerator:
-    def __init__(self, GROQ_API_K: str):
-        self.analyzer_llm = ChatGroq(
-            model="llama-3.3-70b-versatile", 
-            api_key=GROQ_API_K,
-            temperature=0.7
-        )
-        self.documenter_llm = ChatGroq(
-            model="llama-3.3-70b-versatile",
-            api_key=GROQ_API_K,
-            temperature=0.7
-        )
-        self.reviewer_llm = ChatGroq(
-            model="llama-3.3-70b-versatile",
-            api_key=GROQ_API_K,
-            temperature=0.7
-        )
 
 
-        # ✅ NEW FUNCTION - ADD THIS ONE
-    def read_repository_files(self, repo_path: str) -> Dict[str, str]:
-        """Read all relevant files"""
-        file_contents = {}
-        supported_extensions = {
-            '.py', '.js', '.ts', '.java', '.cpp', '.c', '.h',
-            '.md', '.txt', '.yml', '.yaml', '.json', '.xml', 
-            '.html', '.css', '.jsx', '.tsx', '.go', '.rs', '.rb'
-        }
-        repo_path = Path(repo_path)
-        
-        # Skip common directories
-        skip_dirs = {'.git', '__pycache__', 'node_modules', 'venv', 'env', '.venv', 'dist', 'build'}
-        
-        all_files = []
-        for f in repo_path.rglob("*"):
-            if f.is_file() and f.suffix in supported_extensions:
-                # Check if file is in skip directory
-                if any(skip_dir in f.parts for skip_dir in skip_dirs):
-                    continue
-                all_files.append(f)
+#     def analyze_repository_structure(self, state: DocumentationState):#-> DocumentationState
+#         """Analyze repo structure"""
+#         prompt = f"Analyze repo {state['repo_name']} with files: {list(state['file_contents'].keys())[:10]}"
+#         try:
+#             response = self.analyzer_llm.invoke([HumanMessage(content=prompt)])
+#             state["initial_documentation"] = response.content
+#             state["current_step"] = "analysis_complete"
+#         except Exception as e:
+#             state["initial_documentation"] = f"Basic analysis for {state['repo_name']}"
+#             state["current_step"] = "analysis_complete"
+#         return state
 
-        total_chars = 0
-        for file_path in all_files:
-            try:
-                # Skip large files
-                if file_path.stat().st_size > 512*1024: 
-                    continue
-                    
-                with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
-                    content = f.read()
-                    
-                # Skip very long files
-                if len(content) > 20000:
-                    continue
-                    
-                # Stop if we've read too much
-                if total_chars + len(content) > 200000:
-                    break
-                    
-                file_contents[str(file_path.relative_to(repo_path))] = content
-                total_chars += len(content)
-                
-            except Exception as e:
-                print(f"⚠️ Could not read {file_path}: {e}")
-                
-        return file_contents
+#     def generate_documentation(self, state: DocumentationState) -> DocumentationState:
+#         """Generate docs"""
+#         doc_prompt = f"Generate documentation for {state['repo_name']}:\n{state['initial_documentation']}"
+#         try:
+#             response = self.documenter_llm.invoke([HumanMessage(content=doc_prompt)])
+#             state["reviewed_documentation"] = response.content
+#             state["current_step"] = "documentation_complete"
+#         except Exception as e:
+#             state["error_message"] = str(e)
+#             state["current_step"] = "error"
+#         return state
 
+#     def review_documentation(self, state: DocumentationState) -> DocumentationState:
+#         """Refine docs"""
+#         review_prompt = f"Improve documentation:\n{state['reviewed_documentation'][:8000]}"
+#         try:
+#             response = self.reviewer_llm.invoke([HumanMessage(content=review_prompt)])
+#             state["final_documentation"] = response.content
+#             state["current_step"] = "review_complete"
+#         except Exception:
+#             state["final_documentation"] = state["reviewed_documentation"]
+#             state["current_step"] = "review_complete"
+#         return state
+
+#     def save_documentation(self, state: DocumentationState) -> DocumentationState:
+#         """Save docs"""
+#         docs_dir = Path("repos_docs2")
+#         docs_dir.mkdir(exist_ok=True)
+#         file_path = docs_dir / f"{state['repo_name']}_documentation.md"
+#         with open(file_path, "w", encoding="utf-8") as f:
+#             f.write(f"# Generated on {datetime.now()}\n\n")
+#             f.write(state["final_documentation"])
+#         state["current_step"] = "complete"
+#         return state
 
 
-    def analyze_repository_structure(self, state: DocumentationState):#-> DocumentationState
-        """Analyze repo structure"""
-        prompt = f"Analyze repo {state['repo_name']} with files: {list(state['file_contents'].keys())[:10]}"
-        try:
-            response = self.analyzer_llm.invoke([HumanMessage(content=prompt)])
-            state["initial_documentation"] = response.content
-            state["current_step"] = "analysis_complete"
-        except Exception as e:
-            state["initial_documentation"] = f"Basic analysis for {state['repo_name']}"
-            state["current_step"] = "analysis_complete"
-        return state
-
-    def generate_documentation(self, state: DocumentationState) -> DocumentationState:
-        """Generate docs"""
-        doc_prompt = f"Generate documentation for {state['repo_name']}:\n{state['initial_documentation']}"
-        try:
-            response = self.documenter_llm.invoke([HumanMessage(content=doc_prompt)])
-            state["reviewed_documentation"] = response.content
-            state["current_step"] = "documentation_complete"
-        except Exception as e:
-            state["error_message"] = str(e)
-            state["current_step"] = "error"
-        return state
-
-    def review_documentation(self, state: DocumentationState) -> DocumentationState:
-        """Refine docs"""
-        review_prompt = f"Improve documentation:\n{state['reviewed_documentation'][:8000]}"
-        try:
-            response = self.reviewer_llm.invoke([HumanMessage(content=review_prompt)])
-            state["final_documentation"] = response.content
-            state["current_step"] = "review_complete"
-        except Exception:
-            state["final_documentation"] = state["reviewed_documentation"]
-            state["current_step"] = "review_complete"
-        return state
-
-    def save_documentation(self, state: DocumentationState) -> DocumentationState:
-        """Save docs"""
-        docs_dir = Path("repos_docs2")
-        docs_dir.mkdir(exist_ok=True)
-        file_path = docs_dir / f"{state['repo_name']}_documentation.md"
-        with open(file_path, "w", encoding="utf-8") as f:
-            f.write(f"# Generated on {datetime.now()}\n\n")
-            f.write(state["final_documentation"])
-        state["current_step"] = "complete"
-        return state
+# # ------------------------------
+# # HELPER: HASH
+# # ------------------------------
+# def calculate_repo_hash(file_contents: Dict[str, str]) -> str:
+#     """Create hash for repo contents"""
+#     md5 = hashlib.md5()
+#     for path, content in sorted(file_contents.items()):
+#         md5.update(path.encode("utf-8"))
+#         md5.update(content.encode("utf-8"))
+#     return md5.hexdigest()
 
 
-# ------------------------------
-# HELPER: HASH
-# ------------------------------
-def calculate_repo_hash(file_contents: Dict[str, str]) -> str:
-    """Create hash for repo contents"""
-    md5 = hashlib.md5()
-    for path, content in sorted(file_contents.items()):
-        md5.update(path.encode("utf-8"))
-        md5.update(content.encode("utf-8"))
-    return md5.hexdigest()
+# # ------------------------------
+# # WORKFLOW
+# # ------------------------------
+# def create_documentation_workflow():
+#     gen = DocumentationGenerator(GROQ_API_KEY)
+#     workflow = StateGraph(DocumentationState)
+#     workflow.add_node("analyze", gen.analyze_repository_structure)
+#     workflow.add_node("document", gen.generate_documentation)
+#     workflow.add_node("review", gen.review_documentation)
+#     workflow.add_node("save", gen.save_documentation)
+
+#     workflow.set_entry_point("analyze")
+#     workflow.add_edge("analyze", "document")
+#     workflow.add_edge("document", "review")
+#     workflow.add_edge("review", "save")
+#     workflow.add_edge("save", END)
+#     return workflow.compile()
 
 
-# ------------------------------
-# WORKFLOW
-# ------------------------------
-def create_documentation_workflow():
-    gen = DocumentationGenerator(GROQ_API_KEY)
-    workflow = StateGraph(DocumentationState)
-    workflow.add_node("analyze", gen.analyze_repository_structure)
-    workflow.add_node("document", gen.generate_documentation)
-    workflow.add_node("review", gen.review_documentation)
-    workflow.add_node("save", gen.save_documentation)
+# # ------------------------------
+# # PROCESS REPO
+# # ------------------------------
+# def process_repository(repo_path: str, repo_name: str = None, metadata_file="repo_doc_metadata.json"):
+#     """Process a single repo"""
+#     print(f"🔹 Processing repository at -> {repo_path}")
 
-    workflow.set_entry_point("analyze")
-    workflow.add_edge("analyze", "document")
-    workflow.add_edge("document", "review")
-    workflow.add_edge("review", "save")
-    workflow.add_edge("save", END)
-    return workflow.compile()
+#     if repo_name is None:
+#         repo_name = Path(repo_path).name
 
+#     # Load metadata
+#     metadata = {}
+#     if os.path.exists(metadata_file):
+#         with open(metadata_file, "r", encoding="utf-8") as f:
+#             metadata = json.load(f)
 
-# ------------------------------
-# PROCESS REPO
-# ------------------------------
-def process_repository(repo_path: str, repo_name: str = None, metadata_file="repo_doc_metadata.json"):
-    """Process a single repo"""
-    print(f"🔹 Processing repository at -> {repo_path}")
+#     gen = DocumentationGenerator(GROQ_API_KEY)
+#     file_contents = gen.read_repository_files(repo_path)
+#     if not file_contents:
+#         return f"Failed: no files in {repo_name}"
 
-    if repo_name is None:
-        repo_name = Path(repo_path).name
+#     current_hash = calculate_repo_hash(file_contents)
 
-    # Load metadata
-    metadata = {}
-    if os.path.exists(metadata_file):
-        with open(metadata_file, "r", encoding="utf-8") as f:
-            metadata = json.load(f)
+#     # Skip if unchanged
+#     if repo_name in metadata and metadata[repo_name]["hash"] == current_hash:
+#         print(f"⏩ Skipping {repo_name}: no changes detected")
+#         return f"Skipped: no changes in {repo_name}"
 
-    gen = DocumentationGenerator(GROQ_API_KEY)
-    file_contents = gen.read_repository_files(repo_path)
-    if not file_contents:
-        return f"Failed: no files in {repo_name}"
-
-    current_hash = calculate_repo_hash(file_contents)
-
-    # Skip if unchanged
-    if repo_name in metadata and metadata[repo_name]["hash"] == current_hash:
-        print(f"⏩ Skipping {repo_name}: no changes detected")
-        return f"Skipped: no changes in {repo_name}"
-
-    # Run workflow
-    workflow = create_documentation_workflow()
-    state = DocumentationState(
-        repo_path=repo_path,
-        repo_name=repo_name,
-        file_contents=file_contents,
-        initial_documentation="",
-        reviewed_documentation="",
-        final_documentation="",
-        current_step="initialized",
-        error_message=""
-    )
-    final_state = workflow.invoke(state)
-    if final_state["current_step"] == "complete":
-        metadata[repo_name] = {
-            "hash": current_hash,
-            "last_updated": datetime.now().isoformat()
-        }
-        with open(metadata_file, "w", encoding="utf-8") as f:
-            json.dump(metadata, f, indent=2)
-        return f"Success: docs generated for {repo_name}"
-    return f"Failed: {final_state.get('error_message','unknown error')}"
+#     # Run workflow
+#     workflow = create_documentation_workflow()
+#     state = DocumentationState(
+#         repo_path=repo_path,
+#         repo_name=repo_name,
+#         file_contents=file_contents,
+#         initial_documentation="",
+#         reviewed_documentation="",
+#         final_documentation="",
+#         current_step="initialized",
+#         error_message=""
+#     )
+#     final_state = workflow.invoke(state)
+#     if final_state["current_step"] == "complete":
+#         metadata[repo_name] = {
+#             "hash": current_hash,
+#             "last_updated": datetime.now().isoformat()
+#         }
+#         with open(metadata_file, "w", encoding="utf-8") as f:
+#             json.dump(metadata, f, indent=2)
+#         return f"Success: docs generated for {repo_name}"
+#     return f"Failed: {final_state.get('error_message','unknown error')}"
 
 
-# ------------------------------
-# PROCESS ALL REPOS
-# ------------------------------
-def process_all_repositories(base_path="data/github_repos"):
-    print("🚀 Starting documentation generation pipeline...")
-    base = Path(base_path)
-    if not base.exists():
-        print(f"⚠️ {base} does not exist. Creating it now...")
-        base.mkdir(parents=True, exist_ok=True)
-        print(f"✅ Created folder '{base}'")
-        print("⚠️ Currently, no repositories to process. Add repos inside this folder and rerun the script.")
-        return
-    repos = [d for d in base.iterdir() if d.is_dir()]
-    for repo in repos:
-        print(f"\n--- Processing {repo.name} ---")
-        result = process_repository(str(repo), repo.name)
-        print(result)  
+# # ------------------------------
+# # PROCESS ALL REPOS
+# # ------------------------------
+# def process_all_repositories(base_path="data/github_repos"):
+#     print("🚀 Starting documentation generation pipeline...")
+#     base = Path(base_path)
+#     if not base.exists():
+#         print(f"⚠️ {base} does not exist. Creating it now...")
+#         base.mkdir(parents=True, exist_ok=True)
+#         print(f"✅ Created folder '{base}'")
+#         print("⚠️ Currently, no repositories to process. Add repos inside this folder and rerun the script.")
+#         return
+#     repos = [d for d in base.iterdir() if d.is_dir()]
+#     for repo in repos:
+#         print(f"\n--- Processing {repo.name} ---")
+#         result = process_repository(str(repo), repo.name)
+#         print(result)  
 
 
 
@@ -679,4 +679,1509 @@ def process_all_repositories(base_path="data/github_repos"):
 #     for result in results:
 #         status = "✅" if "Success" in result else ("⏩" if "Skipped" in result else "❌")
 #         print(f"{status} {result}")
-#     print("="*60 + "\n")
+#     print("="*60 + "\n")  
+
+
+
+
+
+import sys
+import os
+sys.path.append('.')
+
+from config import GROQ_API_KEY
+from IPython.core.interactiveshell import InteractiveShell
+InteractiveShell.ast_node_interactivity = "all"
+
+import hashlib
+import json
+import time
+import re
+import ast
+from pathlib import Path
+from typing import Dict, TypedDict, List, Set, Tuple
+from datetime import datetime
+from collections import defaultdict
+
+# LangGraph and LangChain imports
+from langgraph.graph import StateGraph, END
+from langchain_groq import ChatGroq
+from langchain.schema import HumanMessage
+
+if not GROQ_API_KEY:
+    raise ValueError("❌ Missing GROQ_API_KEY in .env file")
+
+
+# ============================================================================
+# STATE DEFINITION
+# ============================================================================
+class DocumentationState(TypedDict):
+    repo_path: str
+    repo_name: str
+    file_contents: Dict[str, str]
+    file_structure: Dict[str, any]
+    code_analysis: Dict[str, any]
+    initial_documentation: str
+    reviewed_documentation: str
+    final_documentation: str
+    current_step: str
+    error_message: str
+
+
+# ============================================================================
+# CODE ANALYZER - Extract functions, classes, imports
+# ============================================================================
+class CodeAnalyzer:
+    """Advanced code analysis for Python files"""
+    
+    @staticmethod
+    def analyze_python_file(content: str, file_path: str) -> Dict:
+        """Extract functions, classes, imports from Python file"""
+        analysis = {
+            'functions': [],
+            'classes': [],
+            'imports': [],
+            'constants': [],
+            'file_docstring': '',
+            'complexity_score': 0
+        }
+        
+        try:
+            tree = ast.parse(content)
+            
+            # Get file docstring
+            if ast.get_docstring(tree):
+                analysis['file_docstring'] = ast.get_docstring(tree)
+            
+            for node in ast.walk(tree):
+                # Extract functions
+                if isinstance(node, ast.FunctionDef):
+                    func_info = {
+                        'name': node.name,
+                        'args': [arg.arg for arg in node.args.args],
+                        'docstring': ast.get_docstring(node) or 'No description',
+                        'line_number': node.lineno,
+                        'is_async': isinstance(node, ast.AsyncFunctionDef),
+                        'decorators': [d.id if isinstance(d, ast.Name) else 'decorator' for d in node.decorator_list]
+                    }
+                    analysis['functions'].append(func_info)
+                    analysis['complexity_score'] += len(node.body)
+                
+                # Extract classes
+                elif isinstance(node, ast.ClassDef):
+                    methods = [m.name for m in node.body if isinstance(m, ast.FunctionDef)]
+                    class_info = {
+                        'name': node.name,
+                        'methods': methods,
+                        'docstring': ast.get_docstring(node) or 'No description',
+                        'line_number': node.lineno,
+                        'bases': [b.id if isinstance(b, ast.Name) else 'BaseClass' for b in node.bases]
+                    }
+                    analysis['classes'].append(class_info)
+                
+                # Extract imports
+                elif isinstance(node, (ast.Import, ast.ImportFrom)):
+                    if isinstance(node, ast.Import):
+                        for alias in node.names:
+                            analysis['imports'].append(alias.name)
+                    elif isinstance(node, ast.ImportFrom) and node.module:
+                        analysis['imports'].append(f"{node.module}")
+                
+                # Extract constants (uppercase variables)
+                elif isinstance(node, ast.Assign):
+                    for target in node.targets:
+                        if isinstance(target, ast.Name) and target.id.isupper():
+                            analysis['constants'].append(target.id)
+            
+        except Exception as e:
+            analysis['error'] = str(e)
+        
+        return analysis
+    
+    @staticmethod
+    def analyze_javascript_file(content: str) -> Dict:
+        """Basic analysis for JavaScript/TypeScript files"""
+        analysis = {
+            'functions': [],
+            'classes': [],
+            'imports': [],
+            'exports': []
+        }
+        
+        # Extract function declarations
+        func_pattern = r'(?:function|const|let|var)\s+(\w+)\s*=?\s*(?:function|\([^)]*\)\s*=>)'
+        analysis['functions'] = re.findall(func_pattern, content)
+        
+        # Extract class declarations
+        class_pattern = r'class\s+(\w+)'
+        analysis['classes'] = re.findall(class_pattern, content)
+        
+        # Extract imports
+        import_pattern = r'import\s+.*?from\s+[\'"]([^\'"]+)[\'"]'
+        analysis['imports'] = re.findall(import_pattern, content)
+        
+        # Extract exports
+        export_pattern = r'export\s+(?:default\s+)?(?:class|function|const)?\s*(\w+)?'
+        analysis['exports'] = [e for e in re.findall(export_pattern, content) if e]
+        
+        return analysis
+
+
+# ============================================================================
+# ENHANCED DOCUMENTATION GENERATOR
+# ============================================================================
+class DocumentationGenerator:
+    def __init__(self, groq_api_key: str):
+        """Initialize with enhanced LLM models"""
+        self.analyzer_llm = ChatGroq(
+            model="llama-3.3-70b-versatile", 
+            api_key=groq_api_key,
+            temperature=0.2
+        )
+        self.documenter_llm = ChatGroq(
+            model="llama-3.3-70b-versatile",
+            api_key=groq_api_key,
+            temperature=0.4
+        )
+        self.reviewer_llm = ChatGroq(
+            model="llama-3.3-70b-versatile",
+            api_key=groq_api_key,
+            temperature=0.2
+        )
+        self.code_analyzer = CodeAnalyzer()
+
+    # ========================================================================
+    # FILE READING & STRUCTURE ANALYSIS
+    # ========================================================================
+    
+    def read_repository_files(self, repo_path: str) -> Dict[str, str]:
+        """Read all relevant files with improved filtering"""
+        file_contents = {}
+        supported_extensions = {
+            '.py', '.js', '.ts', '.java', '.cpp', '.c', '.h', '.hpp',
+            '.md', '.txt', '.yml', '.yaml', '.json', '.xml', 
+            '.html', '.css', '.jsx', '.tsx', '.go', '.rs', '.rb',
+            '.php', '.swift', '.kt', '.scala', '.sh', '.bash',
+            '.sql', '.r', '.R', '.m', '.mat'
+        }
+        
+        repo_path = Path(repo_path)
+        skip_dirs = {
+            '.git', '__pycache__', 'node_modules', 'venv', 'env', 
+            '.venv', 'dist', 'build', 'target', '.idea', '.vscode',
+            'coverage', '.pytest_cache', '.mypy_cache', 'site-packages'
+        }
+        
+        all_files = []
+        for f in repo_path.rglob("*"):
+            if f.is_file() and f.suffix in supported_extensions:
+                if any(skip_dir in f.parts for skip_dir in skip_dirs):
+                    continue
+                all_files.append(f)
+
+        total_chars = 0
+        print(f"📂 Found {len(all_files)} relevant files")
+        
+        for file_path in all_files:
+            try:
+                if file_path.stat().st_size > 512*1024: 
+                    continue
+                    
+                with open(file_path, "r", encoding="utf-8", errors="ignore") as f:
+                    content = f.read()
+                    
+                if len(content) > 50000:
+                    content = content[:50000] + "\n... [File truncated]"
+                    
+                if total_chars + len(content) > 400000:
+                    break
+                    
+                file_contents[str(file_path.relative_to(repo_path))] = content
+                total_chars += len(content)
+                
+            except Exception as e:
+                print(f"⚠️ Could not read {file_path}: {e}")
+        
+        print(f"✅ Successfully read {len(file_contents)} files ({total_chars:,} characters)")
+        return file_contents
+
+    def analyze_file_structure(self, file_contents: Dict[str, str]) -> Dict:
+        """Analyze repository structure in detail"""
+        structure = {
+            "total_files": len(file_contents),
+            "by_extension": {},
+            "by_directory": {},
+            "main_files": [],
+            "config_files": [],
+            "source_files": [],
+            "test_files": [],
+            "doc_files": [],
+            "frontend_files": [],
+            "backend_files": [],
+            "database_files": []
+        }
+        
+        for file_path in file_contents.keys():
+            ext = Path(file_path).suffix or "no_extension"
+            structure["by_extension"][ext] = structure["by_extension"].get(ext, 0) + 1
+            
+            directory = str(Path(file_path).parent)
+            structure["by_directory"][directory] = structure["by_directory"].get(directory, 0) + 1
+            
+            file_lower = file_path.lower()
+            
+            # Categorize files
+            if any(name in file_lower for name in ['readme', 'license', 'changelog']):
+                structure["doc_files"].append(file_path)
+            elif any(name in file_lower for name in ['test_', '_test', 'test.', 'spec.']):
+                structure["test_files"].append(file_path)
+            elif any(name in file_lower for name in ['config', 'setup', 'requirements', 'package', '.env']):
+                structure["config_files"].append(file_path)
+            elif any(name in file_lower for name in ['main', 'app', 'index', '__init__', 'server', 'run']):
+                structure["main_files"].append(file_path)
+            elif ext in ['.html', '.css', '.jsx', '.tsx', '.vue']:
+                structure["frontend_files"].append(file_path)
+            elif ext in ['.sql', '.db', '.sqlite']:
+                structure["database_files"].append(file_path)
+            elif ext in ['.py', '.js', '.ts', '.java', '.go', '.rb']:
+                structure["backend_files"].append(file_path)
+            else:
+                structure["source_files"].append(file_path)
+        
+        return structure
+
+    def perform_code_analysis(self, file_contents: Dict[str, str]) -> Dict:
+        """Perform deep code analysis on all files"""
+        print("🔬 Performing deep code analysis...")
+        
+        code_analysis = {
+            'python_files': {},
+            'javascript_files': {},
+            'all_imports': set(),
+            'all_functions': [],
+            'all_classes': [],
+            'entry_points': [],
+            'api_endpoints': [],
+            'database_models': []
+        }
+        
+        for file_path, content in file_contents.items():
+            ext = Path(file_path).suffix
+            
+            # Analyze Python files
+            if ext == '.py':
+                analysis = self.code_analyzer.analyze_python_file(content, file_path)
+                code_analysis['python_files'][file_path] = analysis
+                code_analysis['all_imports'].update(analysis['imports'])
+                code_analysis['all_functions'].extend([f['name'] for f in analysis['functions']])
+                code_analysis['all_classes'].extend([c['name'] for c in analysis['classes']])
+                
+                # Detect entry points
+                if 'if __name__' in content or 'main()' in content:
+                    code_analysis['entry_points'].append(file_path)
+                
+                # Detect API endpoints (Flask, FastAPI, Django)
+                if any(x in content for x in ['@app.route', '@router.', 'path(', 'url(']):
+                    routes = re.findall(r'@\w+\.(?:route|get|post|put|delete)\([\'"]([^\'"]+)', content)
+                    code_analysis['api_endpoints'].extend(routes)
+                
+                # Detect database models
+                if 'class' in content and any(x in content for x in ['Model', 'db.', 'Base']):
+                    models = [c['name'] for c in analysis['classes'] if 'model' in c['name'].lower() or any('Model' in b for b in c.get('bases', []))]
+                    code_analysis['database_models'].extend(models)
+            
+            # Analyze JavaScript/TypeScript files
+            elif ext in ['.js', '.ts', '.jsx', '.tsx']:
+                analysis = self.code_analyzer.analyze_javascript_file(content)
+                code_analysis['javascript_files'][file_path] = analysis
+                code_analysis['all_imports'].update(analysis['imports'])
+        
+        print(f"✅ Code analysis complete: {len(code_analysis['python_files'])} Python files, {len(code_analysis['javascript_files'])} JS/TS files")
+        return code_analysis
+
+    # ========================================================================
+    # ENHANCED ANALYSIS PHASE
+    # ========================================================================
+    
+    def analyze_repository_structure(self, state: DocumentationState) -> DocumentationState:
+        """Comprehensive repository analysis with detailed insights"""
+        print(f"\n{'='*70}")
+        print(f"🔍 ANALYZING REPOSITORY: {state['repo_name']}")
+        print(f"{'='*70}")
+        
+        structure = self.analyze_file_structure(state['file_contents'])
+        state['file_structure'] = structure
+        
+        # Perform code analysis
+        code_analysis = self.perform_code_analysis(state['file_contents'])
+        state['code_analysis'] = code_analysis
+        
+        # Prepare comprehensive analysis prompt
+        file_listing = self._prepare_detailed_file_listing(state['file_contents'], structure, code_analysis)
+        code_structure = self._prepare_code_structure_summary(code_analysis)
+        
+        prompt = f"""Analyze this repository COMPREHENSIVELY: **{state['repo_name']}**
+
+📊 REPOSITORY STATISTICS:
+- Total Files: {structure['total_files']}
+- Main/Entry Files: {len(structure['main_files'])}
+- Backend Files: {len(structure['backend_files'])}
+- Frontend Files: {len(structure['frontend_files'])}
+- Configuration Files: {len(structure['config_files'])}
+- Test Files: {len(structure['test_files'])}
+- Database Files: {len(structure['database_files'])}
+
+🔬 CODE ANALYSIS:
+{code_structure}
+
+📂 DETAILED FILE STRUCTURE:
+{file_listing}
+
+💻 KEY FILE CONTENTS:
+{self._get_key_file_contents(state['file_contents'], structure, code_analysis)}
+
+🎯 REQUIRED ANALYSIS:
+
+Provide a DETAILED technical analysis covering:
+
+## 1. Project Overview
+- **Purpose**: What problem does this solve?
+- **Type**: (Web app, API, CLI tool, library, ML model, etc.)
+- **Target Users**: Who will use this?
+- **Key Value Proposition**: Main benefits
+
+## 2. Technology Stack
+- **Languages**: Primary programming languages with versions
+- **Frameworks**: All frameworks used (Flask, React, Django, etc.)
+- **Libraries**: Key dependencies and their purposes
+- **Databases**: Database systems used
+- **External Services**: APIs, cloud services, etc.
+
+## 3. Architecture Analysis
+- **Architecture Pattern**: (MVC, Microservices, Monolithic, Serverless, etc.)
+- **Key Components**: Identify and explain each major component
+- **Data Flow**: How data moves through the system
+- **Design Patterns**: Any notable design patterns used
+
+## 4. Core Functionality
+- **Main Features**: List all features with detailed explanations
+- **API Endpoints**: If applicable, list all routes/endpoints
+- **Database Models**: Key data models and relationships
+- **Business Logic**: Core algorithms or processing steps
+
+## 5. Code Structure & Organization
+- **Entry Points**: How the application starts
+- **Module Organization**: How code is organized
+- **Configuration**: How settings are managed
+- **Dependencies**: Key external libraries and their roles
+
+## 6. Technical Insights
+- **Code Quality**: Observations on code organization
+- **Complexity**: Overall complexity assessment
+- **Scalability**: Potential scaling considerations
+- **Security**: Any security-related observations
+
+Provide detailed, technical analysis. Be specific about HOW things work, not just WHAT they are."""
+
+        try:
+            print("🤖 Running AI analysis...")
+            response = self.analyzer_llm.invoke([HumanMessage(content=prompt)])
+            state["initial_documentation"] = response.content
+            state["current_step"] = "analysis_complete"
+            print(f"✅ Analysis complete for {state['repo_name']}")
+        except Exception as e:
+            print(f"❌ Analysis failed: {e}")
+            state["initial_documentation"] = self._generate_comprehensive_fallback_analysis(state, structure, code_analysis)
+            state["current_step"] = "analysis_complete"
+            state["error_message"] = f"Analysis AI failed: {str(e)}"
+        
+        return state
+
+    # ========================================================================
+    # ENHANCED DOCUMENTATION GENERATION
+    # ========================================================================
+    
+    def generate_documentation(self, state: DocumentationState) -> DocumentationState:
+        """Generate production-level documentation with diagrams and examples"""
+        print(f"\n{'='*70}")
+        print(f"📝 GENERATING PRODUCTION DOCUMENTATION: {state['repo_name']}")
+        print(f"{'='*70}")
+        
+        structure = state['file_structure']
+        code_analysis = state['code_analysis']
+        
+        # Prepare detailed code documentation
+        file_by_file_docs = self._generate_file_by_file_documentation(state['file_contents'], structure, code_analysis)
+        
+        doc_prompt = f"""Generate PRODUCTION-LEVEL, COMPREHENSIVE documentation for: **{state['repo_name']}**
+
+📋 TECHNICAL ANALYSIS:
+{state['initial_documentation']}
+
+📁 CODE STRUCTURE:
+{self._prepare_code_structure_summary(code_analysis)}
+
+💻 FILE-BY-FILE BREAKDOWN:
+{file_by_file_docs[:8000]}
+
+🎯 DOCUMENTATION REQUIREMENTS:
+
+Create professional, production-ready documentation following this EXACT structure:
+
+# {state['repo_name']}
+
+> **Professional Documentation**  
+> Generated: {datetime.now().strftime('%B %d, %Y')}
+
+## 📋 Table of Contents
+1. [Overview](#overview)
+2. [Features](#features)
+3. [Technology Stack](#technology-stack)
+4. [System Architecture](#system-architecture)
+5. [Installation & Setup](#installation--setup)
+6. [Usage Guide](#usage-guide)
+7. [Code Structure](#code-structure)
+8. [API Reference](#api-reference)
+9. [Database Schema](#database-schema)
+10. [Configuration](#configuration)
+11. [Development Guide](#development-guide)
+12. [Deployment](#deployment)
+
+---
+
+## 🎯 Overview
+
+### Purpose
+[Explain what this project does and why it exists]
+
+### Key Features
+- Feature 1: Detailed explanation
+- Feature 2: Detailed explanation
+- Feature 3: Detailed explanation
+
+### Target Audience
+[Who should use this?]
+
+### Technology Summary
+[Brief tech stack overview]
+
+---
+
+## ✨ Features
+
+### Feature 1: [Name]
+**Description:** Detailed explanation of what this feature does
+
+**Implementation:**
+```python
+# Show actual code from the repository
+def example_function():
+    pass
+```
+
+**Usage:**
+```bash
+# How to use this feature
+```
+
+[Repeat for ALL major features]
+
+---
+
+## 🛠 Technology Stack
+
+### Core Technologies
+| Technology | Purpose | Version |
+|------------|---------|---------|
+| Python | Backend | 3.x |
+| Flask | Web Framework | 2.x |
+| SQLite | Database | 3.x |
+
+### Dependencies
+- **Package 1**: Purpose and why it's needed
+- **Package 2**: Purpose and why it's needed
+
+---
+
+## 🏗 System Architecture
+
+### Architecture Diagram
+```mermaid
+graph TB
+    A[Client/Browser] -->|HTTP Request| B[Web Server]
+    B -->|Route| C[Application Logic]
+    C -->|Query| D[Database]
+    D -->|Data| C
+    C -->|Response| B
+    B -->|HTML/JSON| A
+    
+    subgraph "Application Layer"
+    C
+    end
+    
+    subgraph "Data Layer"
+    D
+    end
+```
+
+### Component Breakdown
+
+#### 1. Entry Point
+- **File**: `app.py` (or main file)
+- **Purpose**: Application initialization and configuration
+- **Key Responsibilities**:
+  - Initialize Flask app
+  - Configure routes
+  - Start server
+
+#### 2. Core Logic
+- **Files**: [List relevant files]
+- **Purpose**: Business logic implementation
+- **Functions**:
+  - `function1()`: Explanation
+  - `function2()`: Explanation
+
+#### 3. Data Layer
+- **Files**: [List database-related files]
+- **Purpose**: Data persistence and retrieval
+
+### Data Flow Diagram
+```mermaid
+sequenceDiagram
+    participant User
+    participant Server
+    participant Logic
+    participant Database
+    
+    User->>Server: HTTP Request
+    Server->>Logic: Process Request
+    Logic->>Database: Query Data
+    Database-->>Logic: Return Results
+    Logic-->>Server: Formatted Response
+    Server-->>User: HTTP Response
+```
+
+---
+
+## 🚀 Installation & Setup
+
+### Prerequisites
+```bash
+# System requirements
+- Python 3.7+
+- pip package manager
+- [Other requirements]
+```
+
+### Step-by-Step Installation
+
+#### 1. Clone Repository
+```bash
+git clone [repository-url]
+cd {state['repo_name']}
+```
+
+#### 2. Create Virtual Environment
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\\Scripts\\activate
+```
+
+#### 3. Install Dependencies
+```bash
+pip install -r requirements.txt
+```
+
+#### 4. Configuration
+```bash
+# Copy environment template
+cp .env.example .env
+
+# Edit configuration
+nano .env
+```
+
+#### 5. Initialize Database (if applicable)
+```bash
+python init_db.py
+```
+
+#### 6. Run Application
+```bash
+python app.py
+```
+
+### Verification
+```bash
+# Test the installation
+curl http://localhost:5000
+```
+
+---
+
+## 📘 Usage Guide
+
+### Basic Usage
+
+#### Example 1: [Use Case]
+```python
+# Show real code example from repository
+from app import create_app
+
+app = create_app()
+app.run()
+```
+
+**Expected Output:**
+```
+Server running on http://localhost:5000
+```
+
+#### Example 2: [Another Use Case]
+[Provide detailed usage examples]
+
+### Advanced Usage
+
+#### Custom Configuration
+```python
+# Show how to customize
+```
+
+#### Integration Example
+```python
+# Show how to integrate with other systems
+```
+
+---
+
+## 📂 Code Structure
+
+### Project Layout
+```
+{state['repo_name']}/
+├── app.py                 # Main application entry
+├── config.py              # Configuration settings
+├── requirements.txt       # Dependencies
+├── models/                # Data models
+│   └── user.py
+├── routes/                # API routes
+│   └── api.py
+├── templates/             # HTML templates
+│   └── index.html
+└── static/                # Static files
+    ├── css/
+    └── js/
+```
+
+### File-by-File Documentation
+
+{self._format_file_documentation(code_analysis, state['file_contents'])}
+
+### Code Flow Diagram
+```mermaid
+flowchart TD
+    Start([Application Start]) --> Init[Initialize App]
+    Init --> LoadConfig[Load Configuration]
+    LoadConfig --> ConnectDB[Connect to Database]
+    ConnectDB --> RegisterRoutes[Register Routes]
+    RegisterRoutes --> StartServer[Start Server]
+    StartServer --> Listen[Listen for Requests]
+    Listen --> Process[Process Request]
+    Process --> Response[Send Response]
+    Response --> Listen
+```
+
+---
+
+## 🔌 API Reference
+
+[IF APIs exist, document them. Otherwise, state "No REST API endpoints detected"]
+
+### Endpoints
+
+#### GET /api/endpoint
+**Description:** What this endpoint does
+
+**Request:**
+```http
+GET /api/endpoint HTTP/1.1
+Host: localhost:5000
+```
+
+**Response:**
+```json
+{{
+  "status": "success",
+  "data": {{}}
+}}
+```
+
+[Document ALL endpoints found in code_analysis]
+
+---
+
+## 🗄 Database Schema
+
+[IF database models exist, document them. Otherwise, state "No database schema detected"]
+
+### Entity Relationship Diagram
+```mermaid
+erDiagram
+    USER ||--o{{ POST : creates
+    USER {{
+        int id
+        string username
+        string email
+    }}
+    POST {{
+        int id
+        string title
+        text content
+        int user_id
+    }}
+```
+
+### Tables
+
+#### users
+| Column | Type | Description |
+|--------|------|-------------|
+| id | INTEGER | Primary key |
+| username | TEXT | User's name |
+
+[Document ALL models from code_analysis]
+
+---
+
+## ⚙️ Configuration
+
+### Environment Variables
+```env
+# Application Settings
+APP_ENV=development
+DEBUG=True
+SECRET_KEY=your-secret-key
+
+# Database
+DATABASE_URL=sqlite:///app.db
+
+# Server
+HOST=0.0.0.0
+PORT=5000
+```
+
+### Configuration Files
+- `config.py`: Main configuration
+- `.env`: Environment-specific settings
+
+---
+
+## 👨‍💻 Development Guide
+
+### Setting Up Development Environment
+```bash
+# Install dev dependencies
+pip install -r requirements-dev.txt
+
+# Run in development mode
+export FLASK_ENV=development
+flask run
+```
+
+### Code Style
+- Follow PEP 8 for Python
+- Use meaningful variable names
+- Add docstrings to functions
+
+### Testing
+```bash
+# Run tests
+pytest tests/
+
+# With coverage
+pytest --cov=app tests/
+```
+
+---
+
+## 🚢 Deployment
+
+### Production Deployment
+
+#### Using Gunicorn
+```bash
+gunicorn app:app --bind 0.0.0.0:8000
+```
+
+#### Using Docker
+```dockerfile
+FROM python:3.9
+WORKDIR /app
+COPY requirements.txt .
+RUN pip install -r requirements.txt
+COPY . .
+CMD ["python", "app.py"]
+```
+
+### Environment Setup
+```bash
+# Set production environment
+export APP_ENV=production
+export DEBUG=False
+```
+
+---
+
+## 📊 Performance Considerations
+
+### Optimization Tips
+1. Enable caching
+2. Use database indexing
+3. Optimize queries
+
+### Monitoring
+- Log important events
+- Track errors
+- Monitor resource usage
+
+---
+
+## 🤝 Contributing
+
+### How to Contribute
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Submit a pull request
+
+### Code Review Process
+- All changes require review
+- Tests must pass
+- Follow code style guidelines
+
+---
+
+## 📄 License
+
+[Include license information if found]
+
+---
+
+## 📞 Support
+
+For issues and questions:
+- Create an issue on GitHub
+- Check documentation
+- Review existing issues
+
+---
+
+**CRITICAL REQUIREMENTS:**
+1. Use ACTUAL code from the repository - not placeholders
+2. All Mermaid diagrams must be syntactically correct
+3. Explain WHAT the code does and HOW it works
+4. Include working examples from actual files
+5. Document EVERY important file
+6. Make diagrams reflect actual architecture
+7. Be specific about versions, paths, and commands
+8. Production-ready quality - clear, complete, professional
+"""
+
+        try:
+            print("🤖 Generating production documentation...")
+            print("⏳ This may take 30-60 seconds...")
+            response = self.documenter_llm.invoke([HumanMessage(content=doc_prompt)])
+            state["reviewed_documentation"] = response.content
+            state["current_step"] = "documentation_complete"
+            print(f"✅ Documentation generated for {state['repo_name']}")
+        except Exception as e:
+            print(f"❌ Documentation generation failed: {e}")
+            state["error_message"] = f"Documentation AI failed: {str(e)}"
+            state["reviewed_documentation"] = self._generate_comprehensive_fallback_docs(state)
+            state["current_step"] = "documentation_complete"
+        
+        return state
+
+    # ========================================================================
+    # REVIEW & ENHANCEMENT
+    # ========================================================================
+    
+    def review_documentation(self, state: DocumentationState) -> DocumentationState:
+        """Review and enhance documentation quality"""
+        print(f"\n{'='*70}")
+        print(f"🔍 REVIEWING DOCUMENTATION: {state['repo_name']}")
+        print(f"{'='*70}")
+        
+        review_prompt = f"""Review and ENHANCE this documentation for PRODUCTION quality.
+
+CURRENT DOCUMENTATION:
+{state['reviewed_documentation'][:20000]}
+
+REVIEW CHECKLIST:
+✅ Technical Accuracy: All code examples are correct
+✅ Completeness: All sections have detailed content
+✅ Mermaid Diagrams: Syntactically valid and accurate
+✅ Code Examples: Real code from repository
+✅ Clarity: Professional, clear explanations
+✅ Structure: Logical flow and organization
+✅ Details: Sufficient depth in all sections
+
+ENHANCEMENT REQUIREMENTS:
+1. Fix any technical errors
+2. Add missing details to thin sections
+3. Verify Mermaid syntax is correct
+4. Ensure all code examples are from actual files
+5. Improve explanations for complex concepts
+6. Make diagrams more detailed and accurate
+7. Add any missing important information
+8. Ensure professional tone throughout
+
+Return the ENHANCED, production-ready documentation."""
+
+        try:
+            print("🤖 Reviewing and enhancing...")
+            response = self.reviewer_llm.invoke([HumanMessage(content=review_prompt)])
+            state["final_documentation"] = response.content
+            state["current_step"] = "review_complete"
+            print(f"✅ Documentation reviewed for {state['repo_name']}")
+        except Exception as e:
+            print(f"⚠️ Review failed, using generated version: {e}")
+            state["final_documentation"] = state["reviewed_documentation"]
+            state["current_step"] = "review_complete"
+        
+        return state
+
+    # ========================================================================
+    # SAVE DOCUMENTATION
+    # ========================================================================
+    
+    def save_documentation(self, state: DocumentationState) -> DocumentationState:
+        """Save comprehensive documentation"""
+        print(f"\n{'='*70}")
+        print(f"💾 SAVING DOCUMENTATION: {state['repo_name']}")
+        print(f"{'='*70}")
+        
+        docs_dir = Path("repos_docs2")
+        docs_dir.mkdir(exist_ok=True)
+        file_path = docs_dir / f"{state['repo_name']}_documentation.md"
+        
+        try:
+            structure = state.get('file_structure', {})
+            code_analysis = state.get('code_analysis', {})
+            
+            # Create comprehensive documentation
+            full_doc = f"""{state['final_documentation']}
+
+---
+
+## 📊 Technical Metrics
+
+**Repository Statistics:**
+- Total Files: {structure.get('total_files', 'N/A')}
+- Python Files: {len(code_analysis.get('python_files', {}))}
+- JavaScript Files: {len(code_analysis.get('javascript_files', {}))}
+- Total Functions: {len(code_analysis.get('all_functions', []))}
+- Total Classes: {len(code_analysis.get('all_classes', []))}
+- Entry Points: {len(code_analysis.get('entry_points', []))}
+
+**Files by Category:**
+"""
+            for ext, count in sorted(structure.get('by_extension', {}).items()):
+                full_doc += f"\n- `{ext}`: {count} file(s)"
+            
+            if code_analysis.get('api_endpoints'):
+                full_doc += f"\n\n**API Endpoints Detected:** {len(code_analysis['api_endpoints'])}"
+            
+            if code_analysis.get('database_models'):
+                full_doc += f"\n**Database Models:** {', '.join(code_analysis['database_models'])}"
+            
+            full_doc += f"""
+
+---
+
+## 🔗 Quick Links
+
+- **Repository Structure:** See [Code Structure](#code-structure) section
+- **Setup Guide:** See [Installation & Setup](#installation--setup)
+- **API Documentation:** See [API Reference](#api-reference)
+- **Configuration:** See [Configuration](#configuration)
+
+---
+
+*📅 Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*  
+*🤖 AI-Powered Documentation Generator v2.0*  
+*⭐ Production-Ready Documentation*
+"""
+            
+            with open(file_path, "w", encoding="utf-8") as f:
+                f.write(full_doc)
+            
+            state["current_step"] = "complete"
+            file_size = file_path.stat().st_size
+            print(f"✅ Documentation saved to {file_path}")
+            print(f"📄 File size: {file_size:,} bytes ({file_size/1024:.1f} KB)")
+            
+        except Exception as e:
+            print(f"❌ Failed to save documentation: {e}")
+            state["error_message"] = str(e)
+        
+        return state
+
+    # ========================================================================
+    # HELPER METHODS
+    # ========================================================================
+    
+    def _prepare_detailed_file_listing(self, file_contents: Dict, structure: Dict, code_analysis: Dict) -> str:
+        """Prepare detailed file listing with metadata"""
+        listing = []
+        
+        if structure['main_files']:
+            listing.append("\n🎯 **ENTRY POINT FILES:**")
+            for f in structure['main_files']:
+                size = len(file_contents.get(f, ''))
+                listing.append(f"  📄 {f} ({size:,} bytes)")
+                if f in code_analysis.get('python_files', {}):
+                    funcs = code_analysis['python_files'][f].get('functions', [])
+                    if funcs:
+                        listing.append(f"     └─ Functions: {', '.join([fn['name'] for fn in funcs[:5]])}")
+        
+        if structure['backend_files']:
+            listing.append("\n⚙️ **BACKEND/LOGIC FILES:**")
+            for f in structure['backend_files'][:10]:
+                size = len(file_contents.get(f, ''))
+                listing.append(f"  📄 {f} ({size:,} bytes)")
+        
+        if structure['frontend_files']:
+            listing.append("\n🎨 **FRONTEND FILES:**")
+            for f in structure['frontend_files'][:8]:
+                listing.append(f"  📄 {f}")
+        
+        if structure['config_files']:
+            listing.append("\n⚙️ **CONFIGURATION:**")
+            for f in structure['config_files']:
+                listing.append(f"  📄 {f}")
+        
+        if structure['database_files']:
+            listing.append("\n🗄️ **DATABASE:**")
+            for f in structure['database_files']:
+                listing.append(f"  📄 {f}")
+        
+        return "\n".join(listing)
+    
+    def _prepare_code_structure_summary(self, code_analysis: Dict) -> str:
+        """Prepare code structure summary"""
+        summary = []
+        
+        py_files = len(code_analysis.get('python_files', {}))
+        js_files = len(code_analysis.get('javascript_files', {}))
+        
+        summary.append(f"**Code Files:** {py_files} Python, {js_files} JavaScript/TypeScript")
+        summary.append(f"**Functions:** {len(code_analysis.get('all_functions', []))} total")
+        summary.append(f"**Classes:** {len(code_analysis.get('all_classes', []))} total")
+        
+        if code_analysis.get('entry_points'):
+            summary.append(f"**Entry Points:** {', '.join(code_analysis['entry_points'])}")
+        
+        if code_analysis.get('api_endpoints'):
+            summary.append(f"**API Endpoints:** {len(code_analysis['api_endpoints'])} detected")
+            summary.append(f"  Routes: {', '.join(code_analysis['api_endpoints'][:5])}")
+        
+        if code_analysis.get('database_models'):
+            summary.append(f"**Database Models:** {', '.join(code_analysis['database_models'])}")
+        
+        # Top imports
+        all_imports = list(code_analysis.get('all_imports', set()))[:10]
+        if all_imports:
+            summary.append(f"**Key Dependencies:** {', '.join(all_imports)}")
+        
+        return "\n".join(summary)
+    
+    def _get_key_file_contents(self, file_contents: Dict, structure: Dict, code_analysis: Dict) -> str:
+        """Get contents of key files with analysis"""
+        contents = []
+        
+        # Get main files first
+        priority_files = structure['main_files'][:2] + structure['backend_files'][:3]
+        
+        for file_path in priority_files[:5]:
+            if file_path in file_contents:
+                content = file_contents[file_path]
+                
+                # Add file header
+                contents.append(f"\n{'='*60}")
+                contents.append(f"📄 **{file_path}**")
+                contents.append(f"{'='*60}")
+                
+                # Add analysis if available
+                if file_path in code_analysis.get('python_files', {}):
+                    analysis = code_analysis['python_files'][file_path]
+                    if analysis.get('file_docstring'):
+                        contents.append(f"\n**Description:** {analysis['file_docstring'][:200]}")
+                    
+                    if analysis.get('functions'):
+                        contents.append(f"\n**Functions:** {len(analysis['functions'])}")
+                        for func in analysis['functions'][:3]:
+                            contents.append(f"  - `{func['name']}()`: {func['docstring'][:100]}")
+                    
+                    if analysis.get('classes'):
+                        contents.append(f"\n**Classes:** {len(analysis['classes'])}")
+                        for cls in analysis['classes'][:2]:
+                            contents.append(f"  - `{cls['name']}`: {cls['docstring'][:100]}")
+                
+                # Add code preview
+                contents.append(f"\n**Code Preview:**")
+                contents.append("```python" if file_path.endswith('.py') else "```")
+                contents.append(content[:2000])
+                if len(content) > 2000:
+                    contents.append("\n... [truncated]")
+                contents.append("```\n")
+        
+        return "\n".join(contents)
+    
+    def _generate_file_by_file_documentation(self, file_contents: Dict, structure: Dict, code_analysis: Dict) -> str:
+        """Generate detailed file-by-file documentation"""
+        docs = []
+        
+        # Document Python files
+        for file_path, analysis in code_analysis.get('python_files', {}).items():
+            docs.append(f"\n### 📄 `{file_path}`\n")
+            
+            if analysis.get('file_docstring'):
+                docs.append(f"**Purpose:** {analysis['file_docstring']}\n")
+            
+            if analysis.get('imports'):
+                docs.append(f"**Dependencies:** {', '.join(analysis['imports'][:5])}\n")
+            
+            if analysis.get('classes'):
+                docs.append("**Classes:**")
+                for cls in analysis['classes']:
+                    docs.append(f"- `{cls['name']}`: {cls['docstring']}")
+                    if cls.get('methods'):
+                        docs.append(f"  - Methods: {', '.join(cls['methods'][:5])}")
+                docs.append("")
+            
+            if analysis.get('functions'):
+                docs.append("**Functions:**")
+                for func in analysis['functions'][:5]:
+                    docs.append(f"- `{func['name']}({', '.join(func['args'])})`")
+                    docs.append(f"  - {func['docstring']}")
+                docs.append("")
+        
+        return "\n".join(docs)
+    
+    def _format_file_documentation(self, code_analysis: Dict, file_contents: Dict) -> str:
+        """Format file documentation for final output"""
+        docs = []
+        
+        for file_path, analysis in list(code_analysis.get('python_files', {}).items())[:10]:
+            docs.append(f"\n#### 📄 `{file_path}`\n")
+            docs.append(f"**Purpose:** {analysis.get('file_docstring', 'Core application file')}\n")
+            
+            if analysis.get('functions'):
+                docs.append("**Key Functions:**\n")
+                for func in analysis['functions'][:3]:
+                    args_str = ', '.join(func['args'])
+                    docs.append(f"- **`{func['name']}({args_str})`**")
+                    docs.append(f"  - Description: {func['docstring']}")
+                    docs.append(f"  - Line: {func['line_number']}\n")
+            
+            if analysis.get('classes'):
+                docs.append("**Classes:**\n")
+                for cls in analysis['classes']:
+                    docs.append(f"- **`{cls['name']}`**")
+                    docs.append(f"  - {cls['docstring']}")
+                    docs.append(f"  - Methods: {', '.join(cls['methods'][:5])}\n")
+        
+        return "\n".join(docs)
+    
+    def _generate_comprehensive_fallback_analysis(self, state: DocumentationState, structure: Dict, code_analysis: Dict) -> str:
+        """Generate comprehensive fallback analysis"""
+        return f"""# Technical Analysis: {state['repo_name']}
+
+## Project Overview
+This repository contains {structure['total_files']} files organized across multiple directories.
+
+## Technology Stack
+- **Languages:** {', '.join(structure.get('by_extension', {}).keys())}
+- **Files:** {structure['total_files']} total
+- **Entry Points:** {', '.join(code_analysis.get('entry_points', ['Not detected']))}
+
+## Code Structure
+{self._prepare_code_structure_summary(code_analysis)}
+
+## File Organization
+{self._prepare_detailed_file_listing(state['file_contents'], structure, code_analysis)}
+
+## Key Components
+### Backend Files: {len(structure['backend_files'])}
+### Frontend Files: {len(structure['frontend_files'])}
+### Configuration: {len(structure['config_files'])}
+
+## Detected Features
+- Functions: {len(code_analysis.get('all_functions', []))}
+- Classes: {len(code_analysis.get('all_classes', []))}
+- API Endpoints: {len(code_analysis.get('api_endpoints', []))}
+"""
+    
+    def _generate_comprehensive_fallback_docs(self, state: DocumentationState) -> str:
+        """Generate comprehensive fallback documentation"""
+        structure = state.get('file_structure', {})
+        code_analysis = state.get('code_analysis', {})
+        
+        return f"""# {state['repo_name']} - Documentation
+
+## 📋 Table of Contents
+1. [Overview](#overview)
+2. [Features](#features)
+3. [Installation](#installation)
+4. [Usage](#usage)
+5. [Code Structure](#code-structure)
+6. [Configuration](#configuration)
+
+## 🎯 Overview
+
+{state.get('initial_documentation', 'A software project with multiple components.')}
+
+### Quick Stats
+- **Total Files:** {structure.get('total_files', 0)}
+- **Languages:** {', '.join(structure.get('by_extension', {}).keys())}
+- **Functions:** {len(code_analysis.get('all_functions', []))}
+- **Classes:** {len(code_analysis.get('all_classes', []))}
+
+## ✨ Features
+
+Based on code analysis, this project includes:
+- {len(structure.get('main_files', []))} entry point(s)
+- {len(structure.get('backend_files', []))} backend file(s)
+- {len(structure.get('frontend_files', []))} frontend file(s)
+- {len(code_analysis.get('api_endpoints', []))} API endpoint(s)
+
+## 🚀 Installation
+
+### Prerequisites
+```bash
+# Check for requirements.txt or package.json
+```
+
+### Setup
+```bash
+# Clone repository
+git clone [repository-url]
+cd {state['repo_name']}
+
+# Install dependencies
+pip install -r requirements.txt  # or npm install
+```
+
+## 📘 Usage
+
+### Running the Application
+```bash
+# Check main files: {', '.join(structure.get('main_files', []))}
+python app.py  # or appropriate entry point
+```
+
+## 📂 Code Structure
+
+### Project Layout
+{self._prepare_detailed_file_listing(state['file_contents'], structure, code_analysis)}
+
+### Key Files
+
+{self._generate_file_by_file_documentation(state['file_contents'], structure, code_analysis)}
+
+## ⚙️ Configuration
+
+Configuration files detected:
+{chr(10).join(f'- `{f}`' for f in structure.get('config_files', []))}
+
+---
+
+*Note: This is an auto-generated fallback documentation. For best results, ensure proper API configuration.*
+"""
+
+
+# ============================================================================
+# HELPER FUNCTIONS
+# ============================================================================
+
+def calculate_repo_hash(file_contents: Dict[str, str]) -> str:
+    """Calculate MD5 hash of repository contents"""
+    md5 = hashlib.md5()
+    for path, content in sorted(file_contents.items()):
+        md5.update(path.encode("utf-8"))
+        md5.update(content.encode("utf-8"))
+    return md5.hexdigest()
+
+
+# ============================================================================
+# WORKFLOW CREATION
+# ============================================================================
+
+def create_documentation_workflow():
+    """Create and configure documentation workflow"""
+    gen = DocumentationGenerator(GROQ_API_KEY)
+    workflow = StateGraph(DocumentationState)
+    
+    workflow.add_node("analyze", gen.analyze_repository_structure)
+    workflow.add_node("document", gen.generate_documentation)
+    workflow.add_node("review", gen.review_documentation)
+    workflow.add_node("save", gen.save_documentation)
+
+    workflow.set_entry_point("analyze")
+    workflow.add_edge("analyze", "document")
+    workflow.add_edge("document", "review")
+    workflow.add_edge("review", "save")
+    workflow.add_edge("save", END)
+    
+    return workflow.compile()
+
+
+# ============================================================================
+# REPOSITORY PROCESSING
+# ============================================================================
+
+def process_repository(repo_path: str, repo_name: str = None, metadata_file="repo_doc_metadata.json"):
+    """Process repository with enhanced production-level documentation"""
+    print(f"\n{'='*70}")
+    print(f"🔹 PROCESSING REPOSITORY: {repo_path}")
+    print(f"{'='*70}")
+
+    if repo_name is None:
+        repo_name = Path(repo_path).name
+
+    metadata = {}
+    if os.path.exists(metadata_file):
+        try:
+            with open(metadata_file, "r", encoding="utf-8") as f:
+                metadata = json.load(f)
+        except:
+            metadata = {}
+
+    gen = DocumentationGenerator(GROQ_API_KEY)
+    
+    print(f"📂 Reading repository files...")
+    file_contents = gen.read_repository_files(repo_path)
+    
+    if not file_contents:
+        print(f"⚠️ No supported files found in {repo_name}")
+        return f"Failed: no files in {repo_name}"
+
+    current_hash = calculate_repo_hash(file_contents)
+
+    # ✅ FIX: Check if documentation file exists instead of just hash
+    docs_dir = Path("repos_docs2")
+    doc_file = docs_dir / f"{repo_name}_documentation.md"
+    
+    if doc_file.exists() and repo_name in metadata and metadata[repo_name].get("hash") == current_hash:
+        print(f"⏩ Skipping {repo_name}: no changes detected and docs exist")
+        return f"Skipped: no changes in {repo_name}"
+    
+    # ✅ If doc file doesn't exist, always generate even if hash matches
+    if not doc_file.exists():
+        print(f"📝 Documentation file missing for {repo_name}, generating...")
+
+    print(f"🚀 Starting production documentation workflow...")
+    workflow = create_documentation_workflow()
+    
+    state = DocumentationState(
+        repo_path=repo_path,
+        repo_name=repo_name,
+        file_contents=file_contents,
+        file_structure={},
+        code_analysis={},
+        initial_documentation="",
+        reviewed_documentation="",
+        final_documentation="",
+        current_step="initialized",
+        error_message=""
+    )
+    
+    final_state = workflow.invoke(state)
+    
+    if final_state["current_step"] == "complete":
+        metadata[repo_name] = {
+            "hash": current_hash,
+            "last_updated": datetime.now().isoformat(),
+            "files_analyzed": len(file_contents),
+            "functions_found": len(final_state.get('code_analysis', {}).get('all_functions', [])),
+            "classes_found": len(final_state.get('code_analysis', {}).get('all_classes', []))
+        }
+        with open(metadata_file, "w", encoding="utf-8") as f:
+            json.dump(metadata, f, indent=2)
+        
+        print(f"\n{'='*70}")
+        print(f"✅ SUCCESS: Production documentation generated for {repo_name}")
+        print(f"{'='*70}\n")
+        return f"Success: production docs for {repo_name}"
+    else:
+        error_msg = final_state.get('error_message', 'unknown error')
+        print(f"\n{'='*70}")
+        print(f"❌ FAILED: {repo_name}")
+        print(f"Error: {error_msg}")
+        print(f"{'='*70}\n")
+        return f"Failed: {error_msg}"
+
+# ============================================================================
+# BATCH PROCESSING
+# ============================================================================
+
+def process_all_repositories(base_path="data/github_repos"):
+    """Process all repositories with production documentation"""
+    print("\n" + "="*70)
+    print("🚀 PRODUCTION-LEVEL DOCUMENTATION GENERATOR v2.0")
+    print("="*70 + "\n")
+    
+    base = Path(base_path)
+    
+    if not base.exists():
+        print(f"⚠️ Directory {base} does not exist. Creating...")
+        base.mkdir(parents=True, exist_ok=True)
+        print(f"✅ Created folder '{base}'")
+        print("⚠️ No repositories to process.")
+        return
+    
+    repos = [d for d in base.iterdir() if d.is_dir() and not d.name.startswith('.')]
+    
+    if not repos:
+        print(f"⚠️ No repositories found in {base_path}")
+        return
+    
+    print(f"📦 Found {len(repos)} repositories:\n")
+    for i, repo in enumerate(repos, 1):
+        print(f"   {i}. {repo.name}")
+    print()
+    
+    results = []
+    start_time = time.time()
+    
+    for i, repo in enumerate(repos, 1):
+        print(f"\n{'▼'*70}")
+        print(f"📍 Processing {i}/{len(repos)}: {repo.name}")
+        print(f"{'▼'*70}")
+        
+        result = process_repository(str(repo), repo.name)
+        results.append((repo.name, result))
+        time.sleep(2)
+    
+    elapsed = time.time() - start_time
+    print("\n" + "="*70)
+    print("📊 DOCUMENTATION GENERATION SUMMARY")
+    print("="*70)
+    print(f"⏱️  Total time: {elapsed:.2f} seconds\n")
+    
+    success_count = sum(1 for _, r in results if "Success" in r)
+    skip_count = sum(1 for _, r in results if "Skipped" in r)
+    fail_count = sum(1 for _, r in results if "Failed" in r)
+    
+    for repo_name, result in results:
+        status = "✅" if "Success" in result else ("⏩" if "Skipped" in result else "❌")
+        print(f"{status} {repo_name}: {result}")
+    
+    print(f"\n📈 Results: {success_count} successful, {skip_count} skipped, {fail_count} failed")
+    print("="*70 + "\n")
+
+
+if __name__ == "__main__":
+    print("Enhanced Documentation Generator v2.0")
+    print("Import and use: from utils.doc_utils import process_all_repositories")
