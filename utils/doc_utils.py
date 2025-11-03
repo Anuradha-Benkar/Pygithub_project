@@ -683,8 +683,6 @@
 
 
 
-
-
 import sys
 import os
 sys.path.append('.')
@@ -721,6 +719,7 @@ class DocumentationState(TypedDict):
     file_contents: Dict[str, str]
     file_structure: Dict[str, any]
     code_analysis: Dict[str, any]
+    project_type: str
     initial_documentation: str
     reviewed_documentation: str
     final_documentation: str
@@ -743,7 +742,8 @@ class CodeAnalyzer:
             'imports': [],
             'constants': [],
             'file_docstring': '',
-            'complexity_score': 0
+            'complexity_score': 0,
+            'decorators_used': set()
         }
         
         try:
@@ -756,13 +756,23 @@ class CodeAnalyzer:
             for node in ast.walk(tree):
                 # Extract functions
                 if isinstance(node, ast.FunctionDef):
+                    decorators = []
+                    for d in node.decorator_list:
+                        if isinstance(d, ast.Name):
+                            decorators.append(d.id)
+                            analysis['decorators_used'].add(d.id)
+                        elif isinstance(d, ast.Attribute):
+                            decorators.append(f"{d.value.id if isinstance(d.value, ast.Name) else ''}.{d.attr}")
+                            analysis['decorators_used'].add(d.attr)
+                    
                     func_info = {
                         'name': node.name,
                         'args': [arg.arg for arg in node.args.args],
                         'docstring': ast.get_docstring(node) or 'No description',
                         'line_number': node.lineno,
                         'is_async': isinstance(node, ast.AsyncFunctionDef),
-                        'decorators': [d.id if isinstance(d, ast.Name) else 'decorator' for d in node.decorator_list]
+                        'decorators': decorators,
+                        'returns': self._get_return_type(node)
                     }
                     analysis['functions'].append(func_info)
                     analysis['complexity_score'] += len(node.body)
@@ -770,12 +780,19 @@ class CodeAnalyzer:
                 # Extract classes
                 elif isinstance(node, ast.ClassDef):
                     methods = [m.name for m in node.body if isinstance(m, ast.FunctionDef)]
+                    bases = []
+                    for b in node.bases:
+                        if isinstance(b, ast.Name):
+                            bases.append(b.id)
+                        elif isinstance(b, ast.Attribute):
+                            bases.append(f"{b.value.id if isinstance(b.value, ast.Name) else ''}.{b.attr}")
+                    
                     class_info = {
                         'name': node.name,
                         'methods': methods,
                         'docstring': ast.get_docstring(node) or 'No description',
                         'line_number': node.lineno,
-                        'bases': [b.id if isinstance(b, ast.Name) else 'BaseClass' for b in node.bases]
+                        'bases': bases
                     }
                     analysis['classes'].append(class_info)
                 
@@ -793,10 +810,22 @@ class CodeAnalyzer:
                         if isinstance(target, ast.Name) and target.id.isupper():
                             analysis['constants'].append(target.id)
             
+            analysis['decorators_used'] = list(analysis['decorators_used'])
+            
         except Exception as e:
             analysis['error'] = str(e)
         
         return analysis
+    
+    @staticmethod
+    def _get_return_type(node):
+        """Extract return type if annotated"""
+        if node.returns:
+            if isinstance(node.returns, ast.Name):
+                return node.returns.id
+            elif isinstance(node.returns, ast.Constant):
+                return str(node.returns.value)
+        return None
     
     @staticmethod
     def analyze_javascript_file(content: str) -> Dict:
@@ -805,7 +834,8 @@ class CodeAnalyzer:
             'functions': [],
             'classes': [],
             'imports': [],
-            'exports': []
+            'exports': [],
+            'react_components': []
         }
         
         # Extract function declarations
@@ -824,7 +854,253 @@ class CodeAnalyzer:
         export_pattern = r'export\s+(?:default\s+)?(?:class|function|const)?\s*(\w+)?'
         analysis['exports'] = [e for e in re.findall(export_pattern, content) if e]
         
+        # React component detection
+        if 'react' in content.lower():
+            component_pattern = r'(?:function|const)\s+([A-Z]\w+)\s*(?:=|\()'
+            analysis['react_components'] = re.findall(component_pattern, content)
+        
         return analysis
+
+
+# ============================================================================
+# PROJECT TYPE DETECTOR
+# ============================================================================
+class ProjectTypeDetector:
+    """Intelligent project type detection"""
+    
+    @staticmethod
+    def detect_project_type(file_contents: Dict[str, str], code_analysis: Dict) -> str:
+        """Detect project type from code analysis with high accuracy"""
+        
+        imports = set(str(imp).lower() for imp in code_analysis.get('all_imports', set()))
+        all_code = ' '.join(file_contents.values()).lower()
+        file_names = set(Path(f).name.lower() for f in file_contents.keys())
+        
+        # Machine Learning Project
+        ml_libs = {'sklearn', 'tensorflow', 'keras', 'torch', 'pytorch', 'xgboost', 'lightgbm', 'catboost'}
+        ml_keywords = ['model.fit', 'train_test_split', 'cross_val_score', 'fit(', 'predict(']
+        if any(lib in str(imports) for lib in ml_libs) and any(kw in all_code for kw in ml_keywords):
+            return "Machine Learning / Data Science"
+        
+        # Deep Learning
+        dl_libs = {'tensorflow', 'keras', 'torch', 'pytorch'}
+        if any(lib in str(imports) for lib in dl_libs) and ('neural' in all_code or 'layer' in all_code):
+            return "Deep Learning / Neural Networks"
+        
+        # Web Framework - Flask
+        if 'flask' in str(imports) and ('@app.route' in all_code or '@route' in all_code):
+            return "Flask Web Application (Backend API)"
+        
+        # Web Framework - FastAPI
+        if 'fastapi' in str(imports) and ('@app.' in all_code or 'apirouter' in str(imports)):
+            return "FastAPI Web Application (Backend API)"
+        
+        # Web Framework - Django
+        if 'django' in str(imports) and ('models.model' in all_code or 'settings.py' in file_names):
+            return "Django Web Application"
+        
+        # React/Frontend
+        if any(fw in str(imports) for fw in ['react', 'vue', 'angular']):
+            return "Frontend Web Application (React/Vue/Angular)"
+        
+        # Data Analysis
+        if 'pandas' in str(imports) and ('matplotlib' in str(imports) or 'seaborn' in str(imports)):
+            if 'jupyter' in all_code or '.ipynb' in str(file_names):
+                return "Jupyter Notebook Data Analysis"
+            return "Data Analysis / Visualization"
+        
+        # ETL / Data Pipeline
+        if 'airflow' in str(imports) or 'luigi' in str(imports):
+            return "Data Pipeline / ETL"
+        
+        # CLI Tool
+        if 'argparse' in str(imports) or 'click' in str(imports) or 'typer' in str(imports):
+            return "Command-Line Tool (CLI)"
+        
+        # Web Scraping
+        scraping_libs = {'selenium', 'beautifulsoup', 'bs4', 'scrapy', 'requests'}
+        if any(lib in str(imports) for lib in scraping_libs) and ('soup' in all_code or 'driver' in all_code):
+            return "Web Scraping / Automation"
+        
+        # Bot/Automation
+        if 'telegram' in str(imports) or 'discord' in str(imports) or 'slack' in str(imports):
+            return "Bot / Messaging Automation"
+        
+        # Game Development
+        if 'pygame' in str(imports) or 'unity' in str(imports):
+            return "Game Development"
+        
+        # DevOps/Infrastructure
+        if 'ansible' in str(imports) or 'terraform' in all_code or 'kubernetes' in str(imports):
+            return "DevOps / Infrastructure Automation"
+        
+        # Desktop GUI
+        if any(lib in str(imports) for lib in ['tkinter', 'pyqt', 'kivy', 'wxpython']):
+            return "Desktop GUI Application"
+        
+        # Library/Package
+        if 'setup.py' in file_names or 'pyproject.toml' in file_names:
+            return "Python Library / Package"
+        
+        # API Client
+        if 'requests' in str(imports) and 'api' in all_code:
+            return "API Client / Integration"
+        
+        # Testing Framework
+        if 'pytest' in str(imports) or 'unittest' in str(imports):
+            return "Testing Framework / Test Suite"
+        
+        return "General Python Application"
+
+
+# ============================================================================
+# CODE EXTRACTION UTILITIES
+# ============================================================================
+class CodeExtractor:
+    """Extract actual code snippets from files"""
+    
+    @staticmethod
+    def extract_function_code(file_content: str, func_name: str, line_number: int, lines_to_get: int = 20) -> str:
+        """Extract function code from file"""
+        lines = file_content.split('\n')
+        start = max(0, line_number - 1)
+        
+        # Try to find the end of the function
+        indent_level = None
+        end = start
+        for i in range(start, min(len(lines), start + 50)):
+            line = lines[i]
+            if line.strip() and indent_level is None:
+                indent_level = len(line) - len(line.lstrip())
+            elif line.strip() and indent_level is not None:
+                current_indent = len(line) - len(line.lstrip())
+                if current_indent <= indent_level and i > start:
+                    end = i
+                    break
+            end = i + 1
+        
+        return '\n'.join(lines[start:min(end, start + lines_to_get)])
+    
+    @staticmethod
+    def extract_class_code(file_content: str, class_name: str, line_number: int, lines_to_get: int = 30) -> str:
+        """Extract class code from file"""
+        lines = file_content.split('\n')
+        start = max(0, line_number - 1)
+        end = min(len(lines), start + lines_to_get)
+        return '\n'.join(lines[start:end])
+    
+    @staticmethod
+    def get_key_functions_with_code(code_analysis: Dict, file_contents: Dict, limit: int = 5) -> str:
+        """Extract key functions with actual code"""
+        functions_info = []
+        
+        for file_path, analysis in list(code_analysis.get('python_files', {}).items())[:5]:
+            for func in analysis.get('functions', [])[:limit]:
+                code = file_contents.get(file_path, '')
+                func_code = CodeExtractor.extract_function_code(code, func['name'], func['line_number'])
+                
+                decorators_str = f"@{', @'.join(func['decorators'])}" if func['decorators'] else ""
+                
+                functions_info.append(f"""
+**Function: `{func['name']}()`** in `{file_path}` (Line {func['line_number']})
+{decorators_str}
+- Arguments: `{', '.join(func['args'])}`
+- Description: {func['docstring'][:200]}
+- Code:
+```python
+{func_code[:600]}
+{'... [truncated]' if len(func_code) > 600 else ''}
+```
+""")
+        
+        return '\n'.join(functions_info[:limit])
+    
+    @staticmethod
+    def get_key_classes_with_code(code_analysis: Dict, file_contents: Dict, limit: int = 3) -> str:
+        """Extract key classes with actual code"""
+        classes_info = []
+        
+        for file_path, analysis in list(code_analysis.get('python_files', {}).items())[:5]:
+            for cls in analysis.get('classes', [])[:limit]:
+                code = file_contents.get(file_path, '')
+                class_code = CodeExtractor.extract_class_code(code, cls['name'], cls['line_number'])
+                
+                bases_str = f"({', '.join(cls['bases'])})" if cls['bases'] else ""
+                
+                classes_info.append(f"""
+**Class: `{cls['name']}{bases_str}`** in `{file_path}` (Line {cls['line_number']})
+- Methods: `{', '.join(cls['methods'][:8])}`
+- Description: {cls['docstring'][:200]}
+- Code:
+```python
+{class_code[:600]}
+{'... [truncated]' if len(class_code) > 600 else ''}
+```
+""")
+        
+        return '\n'.join(classes_info[:limit])
+
+
+# ============================================================================
+# FILE STRUCTURE UTILITIES
+# ============================================================================
+class FileStructureHelper:
+    """Helper for file structure visualization"""
+    
+    @staticmethod
+    def create_file_tree(file_contents: Dict, max_depth: int = 3) -> str:
+        """Create visual file tree"""
+        tree = {}
+        for file_path in sorted(file_contents.keys()):
+            parts = Path(file_path).parts
+            current = tree
+            for i, part in enumerate(parts):
+                if i >= max_depth:
+                    break
+                if part not in current:
+                    current[part] = {}
+                current = current[part]
+        
+        def format_tree(d, indent=0):
+            lines = []
+            items = sorted(d.keys())
+            for idx, key in enumerate(items):
+                is_last = idx == len(items) - 1
+                prefix = "    " * indent + ("└── " if is_last else "├── ")
+                lines.append(prefix + key)
+                if d[key]:
+                    lines.extend(format_tree(d[key], indent + 1))
+            return lines
+        
+        return '\n'.join(format_tree(tree))
+    
+    @staticmethod
+    def detect_primary_language(structure: Dict) -> str:
+        """Detect primary programming language"""
+        extensions = structure.get('by_extension', {})
+        
+        language_map = {
+            '.py': 'Python',
+            '.js': 'JavaScript',
+            '.ts': 'TypeScript',
+            '.jsx': 'JavaScript (React)',
+            '.tsx': 'TypeScript (React)',
+            '.java': 'Java',
+            '.cpp': 'C++',
+            '.c': 'C',
+            '.go': 'Go',
+            '.rs': 'Rust',
+            '.rb': 'Ruby',
+            '.php': 'PHP',
+            '.swift': 'Swift',
+            '.kt': 'Kotlin'
+        }
+        
+        if extensions:
+            main_ext = max(extensions, key=extensions.get)
+            return language_map.get(main_ext, f'Unknown ({main_ext})')
+        
+        return 'Unknown'
 
 
 # ============================================================================
@@ -841,7 +1117,7 @@ class DocumentationGenerator:
         self.documenter_llm = ChatGroq(
             model="llama-3.3-70b-versatile",
             api_key=groq_api_key,
-            temperature=0.4
+            temperature=0.3
         )
         self.reviewer_llm = ChatGroq(
             model="llama-3.3-70b-versatile",
@@ -849,6 +1125,9 @@ class DocumentationGenerator:
             temperature=0.2
         )
         self.code_analyzer = CodeAnalyzer()
+        self.project_detector = ProjectTypeDetector()
+        self.code_extractor = CodeExtractor()
+        self.file_helper = FileStructureHelper()
 
     # ========================================================================
     # FILE READING & STRUCTURE ANALYSIS
@@ -862,14 +1141,15 @@ class DocumentationGenerator:
             '.md', '.txt', '.yml', '.yaml', '.json', '.xml', 
             '.html', '.css', '.jsx', '.tsx', '.go', '.rs', '.rb',
             '.php', '.swift', '.kt', '.scala', '.sh', '.bash',
-            '.sql', '.r', '.R', '.m', '.mat'
+            '.sql', '.r', '.R', '.m', '.mat', '.ipynb'
         }
         
         repo_path = Path(repo_path)
         skip_dirs = {
             '.git', '__pycache__', 'node_modules', 'venv', 'env', 
             '.venv', 'dist', 'build', 'target', '.idea', '.vscode',
-            'coverage', '.pytest_cache', '.mypy_cache', 'site-packages'
+            'coverage', '.pytest_cache', '.mypy_cache', 'site-packages',
+            'bower_components', '.next', '.nuxt'
         }
         
         all_files = []
@@ -893,7 +1173,7 @@ class DocumentationGenerator:
                 if len(content) > 50000:
                     content = content[:50000] + "\n... [File truncated]"
                     
-                if total_chars + len(content) > 400000:
+                if total_chars + len(content) > 500000:  # Increased limit
                     break
                     
                 file_contents[str(file_path.relative_to(repo_path))] = content
@@ -918,7 +1198,8 @@ class DocumentationGenerator:
             "doc_files": [],
             "frontend_files": [],
             "backend_files": [],
-            "database_files": []
+            "database_files": [],
+            "notebook_files": []
         }
         
         for file_path in file_contents.keys():
@@ -931,14 +1212,16 @@ class DocumentationGenerator:
             file_lower = file_path.lower()
             
             # Categorize files
-            if any(name in file_lower for name in ['readme', 'license', 'changelog']):
+            if any(name in file_lower for name in ['readme', 'license', 'changelog', 'contributing']):
                 structure["doc_files"].append(file_path)
-            elif any(name in file_lower for name in ['test_', '_test', 'test.', 'spec.']):
+            elif any(name in file_lower for name in ['test_', '_test', 'test.', 'spec.', 'tests/']):
                 structure["test_files"].append(file_path)
-            elif any(name in file_lower for name in ['config', 'setup', 'requirements', 'package', '.env']):
+            elif any(name in file_lower for name in ['config', 'setup', 'requirements', 'package', '.env', 'dockerfile']):
                 structure["config_files"].append(file_path)
-            elif any(name in file_lower for name in ['main', 'app', 'index', '__init__', 'server', 'run']):
+            elif any(name in file_lower for name in ['main', 'app', 'index', '__init__', 'server', 'run', 'manage']):
                 structure["main_files"].append(file_path)
+            elif ext == '.ipynb':
+                structure["notebook_files"].append(file_path)
             elif ext in ['.html', '.css', '.jsx', '.tsx', '.vue']:
                 structure["frontend_files"].append(file_path)
             elif ext in ['.sql', '.db', '.sqlite']:
@@ -962,11 +1245,14 @@ class DocumentationGenerator:
             'all_classes': [],
             'entry_points': [],
             'api_endpoints': [],
-            'database_models': []
+            'database_models': [],
+            'decorators_used': set(),
+            'test_files': []
         }
         
         for file_path, content in file_contents.items():
             ext = Path(file_path).suffix
+            file_lower = file_path.lower()
             
             # Analyze Python files
             if ext == '.py':
@@ -975,20 +1261,27 @@ class DocumentationGenerator:
                 code_analysis['all_imports'].update(analysis['imports'])
                 code_analysis['all_functions'].extend([f['name'] for f in analysis['functions']])
                 code_analysis['all_classes'].extend([c['name'] for c in analysis['classes']])
+                code_analysis['decorators_used'].update(analysis.get('decorators_used', []))
                 
                 # Detect entry points
-                if 'if __name__' in content or 'main()' in content:
+                if 'if __name__' in content or 'def main()' in content:
                     code_analysis['entry_points'].append(file_path)
                 
+                # Detect test files
+                if 'test' in file_lower or any(f['name'].startswith('test_') for f in analysis['functions']):
+                    code_analysis['test_files'].append(file_path)
+                
                 # Detect API endpoints (Flask, FastAPI, Django)
-                if any(x in content for x in ['@app.route', '@router.', 'path(', 'url(']):
-                    routes = re.findall(r'@\w+\.(?:route|get|post|put|delete)\([\'"]([^\'"]+)', content)
+                if '@app.route' in content or '@router.' in content:
+                    routes = re.findall(r'@(?:app|router)\.(?:route|get|post|put|delete|patch)\([\'"]([^\'"]+)', content)
                     code_analysis['api_endpoints'].extend(routes)
                 
                 # Detect database models
-                if 'class' in content and any(x in content for x in ['Model', 'db.', 'Base']):
-                    models = [c['name'] for c in analysis['classes'] if 'model' in c['name'].lower() or any('Model' in b for b in c.get('bases', []))]
-                    code_analysis['database_models'].extend(models)
+                if 'class' in content:
+                    for cls in analysis['classes']:
+                        if any(term in cls['name'].lower() for term in ['model', 'schema', 'entity']) or \
+                           any('Model' in base or 'Base' in base for base in cls.get('bases', [])):
+                            code_analysis['database_models'].append(cls['name'])
             
             # Analyze JavaScript/TypeScript files
             elif ext in ['.js', '.ts', '.jsx', '.tsx']:
@@ -996,15 +1289,17 @@ class DocumentationGenerator:
                 code_analysis['javascript_files'][file_path] = analysis
                 code_analysis['all_imports'].update(analysis['imports'])
         
-        print(f"✅ Code analysis complete: {len(code_analysis['python_files'])} Python files, {len(code_analysis['javascript_files'])} JS/TS files")
+        print(f"✅ Analysis complete: {len(code_analysis['python_files'])} Python, {len(code_analysis['javascript_files'])} JS/TS")
+        print(f"   Found: {len(code_analysis['all_functions'])} functions, {len(code_analysis['all_classes'])} classes")
+        
         return code_analysis
 
     # ========================================================================
-    # ENHANCED ANALYSIS PHASE
+    # ENHANCED ANALYSIS PHASE WITH IMPROVED PROMPTS
     # ========================================================================
     
     def analyze_repository_structure(self, state: DocumentationState) -> DocumentationState:
-        """Comprehensive repository analysis with detailed insights"""
+        """Comprehensive repository analysis with project-specific prompts"""
         print(f"\n{'='*70}")
         print(f"🔍 ANALYZING REPOSITORY: {state['repo_name']}")
         print(f"{'='*70}")
@@ -1012,79 +1307,32 @@ class DocumentationGenerator:
         structure = self.analyze_file_structure(state['file_contents'])
         state['file_structure'] = structure
         
-        # Perform code analysis
         code_analysis = self.perform_code_analysis(state['file_contents'])
         state['code_analysis'] = code_analysis
         
-        # Prepare comprehensive analysis prompt
-        file_listing = self._prepare_detailed_file_listing(state['file_contents'], structure, code_analysis)
-        code_structure = self._prepare_code_structure_summary(code_analysis)
+        # Detect project type
+        project_type = self.project_detector.detect_project_type(state['file_contents'], code_analysis)
+        state['project_type'] = project_type
+        print(f"🎯 Detected Project Type: {project_type}")
         
-        prompt = f"""Analyze this repository COMPREHENSIVELY: **{state['repo_name']}**
-
-📊 REPOSITORY STATISTICS:
-- Total Files: {structure['total_files']}
-- Main/Entry Files: {len(structure['main_files'])}
-- Backend Files: {len(structure['backend_files'])}
-- Frontend Files: {len(structure['frontend_files'])}
-- Configuration Files: {len(structure['config_files'])}
-- Test Files: {len(structure['test_files'])}
-- Database Files: {len(structure['database_files'])}
-
-🔬 CODE ANALYSIS:
-{code_structure}
-
-📂 DETAILED FILE STRUCTURE:
-{file_listing}
-
-💻 KEY FILE CONTENTS:
-{self._get_key_file_contents(state['file_contents'], structure, code_analysis)}
-
-🎯 REQUIRED ANALYSIS:
-
-Provide a DETAILED technical analysis covering:
-
-## 1. Project Overview
-- **Purpose**: What problem does this solve?
-- **Type**: (Web app, API, CLI tool, library, ML model, etc.)
-- **Target Users**: Who will use this?
-- **Key Value Proposition**: Main benefits
-
-## 2. Technology Stack
-- **Languages**: Primary programming languages with versions
-- **Frameworks**: All frameworks used (Flask, React, Django, etc.)
-- **Libraries**: Key dependencies and their purposes
-- **Databases**: Database systems used
-- **External Services**: APIs, cloud services, etc.
-
-## 3. Architecture Analysis
-- **Architecture Pattern**: (MVC, Microservices, Monolithic, Serverless, etc.)
-- **Key Components**: Identify and explain each major component
-- **Data Flow**: How data moves through the system
-- **Design Patterns**: Any notable design patterns used
-
-## 4. Core Functionality
-- **Main Features**: List all features with detailed explanations
-- **API Endpoints**: If applicable, list all routes/endpoints
-- **Database Models**: Key data models and relationships
-- **Business Logic**: Core algorithms or processing steps
-
-## 5. Code Structure & Organization
-- **Entry Points**: How the application starts
-- **Module Organization**: How code is organized
-- **Configuration**: How settings are managed
-- **Dependencies**: Key external libraries and their roles
-
-## 6. Technical Insights
-- **Code Quality**: Observations on code organization
-- **Complexity**: Overall complexity assessment
-- **Scalability**: Potential scaling considerations
-- **Security**: Any security-related observations
-
-Provide detailed, technical analysis. Be specific about HOW things work, not just WHAT they are."""
+        # Get real code examples
+        key_functions = self.code_extractor.get_key_functions_with_code(code_analysis, state['file_contents'], limit=5)
+        key_classes = self.code_extractor.get_key_classes_with_code(code_analysis, state['file_contents'], limit=3)
+        
+        # Get primary language
+        primary_lang = self.file_helper.detect_primary_language(structure)
+        
+        # Create file tree
+        file_tree = self.file_helper.create_file_tree(state['file_contents'])
+        
+        # Build enhanced analysis prompt
+        prompt = self._create_enhanced_analysis_prompt(
+            state, structure, code_analysis, project_type, 
+            key_functions, key_classes, primary_lang, file_tree
+        )
 
         try:
-            print("🤖 Running AI analysis...")
+            print("🤖 Running AI analysis with enhanced prompts...")
             response = self.analyzer_llm.invoke([HumanMessage(content=prompt)])
             state["initial_documentation"] = response.content
             state["current_step"] = "analysis_complete"
@@ -1097,498 +1345,253 @@ Provide detailed, technical analysis. Be specific about HOW things work, not jus
         
         return state
 
+    def _create_enhanced_analysis_prompt(self, state, structure, code_analysis, project_type, 
+                                         key_functions, key_classes, primary_lang, file_tree):
+        """Create project-type-specific analysis prompt"""
+        
+        main_libraries = sorted(list(code_analysis.get('all_imports', set())))[:20]
+        
+        # Project-specific questions
+        specific_questions = self._get_project_specific_questions(project_type)
+        
+        prompt = f"""You are analyzing a **{project_type}** project: **{state['repo_name']}**
+
+        🔍 PROJECT DETECTION: {project_type}
+
+        📊 REPOSITORY STATISTICS:
+        - Total Files: {structure['total_files']}
+        - Primary Language: {primary_lang}
+        - Python Files: {len(code_analysis.get('python_files', {}))}
+        - JavaScript/TS Files: {len(code_analysis.get('javascript_files', {}))}
+        - Entry Points: {', '.join(code_analysis.get('entry_points', ['Not detected'])[:3])}
+        - Functions: {len(code_analysis.get('all_functions', []))}
+        - Classes: {len(code_analysis.get('all_classes', []))}
+        - API Endpoints: {len(code_analysis.get('api_endpoints', []))}
+        - Database Models: {len(code_analysis.get('database_models', []))}
+
+        🔬 KEY LIBRARIES/FRAMEWORKS DETECTED:
+        {chr(10).join(f"- {lib}" for lib in main_libraries[:15])}
+
+        📂 PROJECT STRUCTURE:
+        ```
+        {file_tree[:2000]}
+        ```
+
+        💻 ACTUAL CODE COMPONENTS:
+
+        {key_functions[:4000]}
+
+        {key_classes[:3000]}
+
+        **API Endpoints Detected:**
+        {chr(10).join(f"- {route}" for route in code_analysis.get('api_endpoints', [])[:15])}
+
+        **Database Models:**
+        {', '.join(code_analysis.get('database_models', [])[:10])}
+
+        **Decorators Used:**
+        {', '.join(sorted(code_analysis.get('decorators_used', []))[:10])}
+
+        🎯 ANALYSIS REQUIREMENTS:
+
+        You MUST provide a DETAILED, SPECIFIC analysis based on the ACTUAL code shown above.
+
+        ## 1. Project Overview (Be SPECIFIC)
+        - **Exact Purpose**: What SPECIFIC problem does this solve? (Look at function names, classes, API endpoints)
+        - **Project Type Confirmation**: Is this truly a {project_type}? Verify from code.
+        - **Target Users**: WHO uses this? (End users, developers, data scientists, etc.)
+        - **Key Value**: What makes this useful? What's the main benefit?
+        - **Input/Output**: What goes IN and what comes OUT?
+
+        ## 2. Technology Stack (FROM ACTUAL IMPORTS)
+        - **Primary Language**: {primary_lang}
+        - **Frameworks**: Identify ALL frameworks (Flask={('@app.route' in str(code_analysis))}, FastAPI, React, etc.)
+        - **Key Libraries & Their PURPOSE**:
+        - For EACH library in imports, explain WHY it's used in THIS project
+        - Example: "pandas - used in load_data() function for CSV processing"
+        - **Database Technology**: {('SQLAlchemy' if 'sqlalchemy' in str(main_libraries) else 'None detected')}
+        - **External Services/APIs**: Any third-party integrations?
+
+        ## 3. Architecture & Design
+        - **Architecture Pattern**: {self._suggest_architecture(project_type)}
+        - **Entry Point**: How does the app start? (Check: {', '.join(code_analysis.get('entry_points', [])[:2])})
+        - **Data Flow**: Trace how data moves through the system
+        - **Component Breakdown**: Identify major components from files and classes
+        - **Design Patterns**: Observer, Factory, Singleton, etc. (if applicable)
+
+        ## 4. Core Functionality Analysis
+        {specific_questions}
+
+        ## 5. Code Organization
+        - **Module Structure**: How is code organized? (by feature, by layer, etc.)
+        - **Key Files & Their Roles**:
+        - Entry Points: {', '.join(structure.get('main_files', [])[:3])}
+        - Core Logic: {', '.join(structure.get('backend_files', [])[:5])}
+        - Configuration: {', '.join(structure.get('config_files', [])[:3])}
+        - **File Relationships**: Which files depend on which?
+
+        ## 6. Feature Inventory (FROM ACTUAL CODE)
+        List EVERY feature you can identify:
+        - Feature 1: [What it does] → Implemented in `file.py::function_name()`
+        - Feature 2: [What it does] → Implemented in `file.py::class_name`
+        (Continue for ALL major features found in code)
+
+        ## 7. Configuration & Dependencies
+        - **Environment Variables**: What's needed? (Check for os.getenv, config files)
+        - **Required Files**: Data files, config files, credentials
+        - **External Dependencies**: Services that must be running
+        - **Installation Requirements**: What needs to be installed?
+
+        ## 8. Technical Insights
+        - **Complexity Level**: Beginner/Intermediate/Advanced
+        - **Code Quality Indicators**: Error handling, logging, type hints, docstrings
+        - **Performance Considerations**: Caching, optimization, async operations
+        - **Security Measures**: Authentication, validation, encryption
+        - **Scalability**: Can it handle growth? Bottlenecks?
+        - **Testing**: Test coverage, testing frameworks used
+
+        ## 9. Data Models (If Applicable)
+        - **Models Found**: {', '.join(code_analysis.get('database_models', [])[:10])}
+        - **Relationships**: How models relate to each other
+        - **Data Validation**: How is data validated?
+
+        ## 10. API Documentation (If Applicable)
+        - **Endpoints**: {len(code_analysis.get('api_endpoints', []))} detected
+        - **Request/Response Formats**: JSON, XML, etc.
+        - **Authentication**: How are requests authenticated?
+
+        ---
+
+        🚨 CRITICAL REQUIREMENTS:
+
+        1. **Use ACTUAL code evidence** - Reference specific functions, classes, files
+        2. **Be PRECISE** - "The RandomForestClassifier in model.py line 45" NOT "uses ML"
+        3. **Explain HOW** - Don't just say "processes data", explain the process
+        4. **Real examples** - Use actual function names, not placeholders
+        5. **Verify claims** - Only state what you can prove from the code
+        6. **Technical depth** - Go deep into implementation details
+
+        Example of GOOD analysis:
+        ✅ "The application uses Flask (app.py:15) with 5 REST endpoints (/api/predict, /api/train, /api/status, /api/health, /api/metrics). The predict() function (model.py:78) loads a pre-trained RandomForestClassifier and makes predictions on 7 features extracted from user input via extract_features() (utils.py:34)."
+
+        Example of BAD analysis:
+        ❌ "The application is a machine learning system that makes predictions."
+
+        Analyze NOW based on ACTUAL code."""
+
+        return prompt
+
+    def _get_project_specific_questions(self, project_type: str) -> str:
+        """Return project-type-specific analysis questions"""
+        
+        questions = {
+            "Machine Learning / Data Science": """
+        **ML-Specific Analysis:**
+        - What is being PREDICTED/CLASSIFIED? (Target variable)
+        - What FEATURES are used? (List actual feature names from code)
+        - What ML ALGORITHM? (RandomForest, LogisticRegression, etc. - cite line number)
+        - DATA PREPROCESSING: How is data cleaned/transformed? (Show actual functions)
+        - TRAINING PROCESS: How is model trained? (Show train code)
+        - EVALUATION METRICS: Accuracy, precision, recall, RMSE? (What's actually measured?)
+        - MODEL PERSISTENCE: How is model saved/loaded?
+        - PREDICTION INTERFACE: How do you input data and get predictions?
+        """,
+                    "Deep Learning / Neural Networks": """
+        **Deep Learning Analysis:**
+        - NETWORK ARCHITECTURE: Layers, neurons, activation functions
+        - FRAMEWORK: TensorFlow, PyTorch, Keras?
+        - TRAINING: Loss function, optimizer, epochs, batch size
+        - DATA PIPELINE: How is training data loaded and preprocessed?
+        - MODEL: Show actual model definition code
+        - INFERENCE: How are predictions made?
+        """,
+                    "Flask Web Application (Backend API)": """
+        **Flask API Analysis:**
+        - ALL ENDPOINTS: List every @app.route with method (GET/POST/etc.)
+        - What does EACH endpoint do? Be specific.
+        - DATABASE: What database? Show model classes.
+        - AUTHENTICATION: How are requests authenticated?
+        - REQUEST/RESPONSE: What's the expected input/output format for each endpoint?
+        - ERROR HANDLING: How are errors handled?
+        - MIDDLEWARE: Any middleware used?
+        """,
+                    "FastAPI Web Application (Backend API)": """
+        **FastAPI Analysis:**
+        - ALL ENDPOINTS: List every @app.get, @app.post, etc.
+        - REQUEST MODELS: What Pydantic models are used?
+        - RESPONSE MODELS: What's returned?
+        - ASYNC: Which endpoints are async?
+        - VALIDATION: How is input validated?
+        - DOCUMENTATION: Is OpenAPI/Swagger auto-generated?
+        """,
+                    "Data Analysis / Visualization": """
+        **Data Analysis:**
+        - DATA SOURCES: What files/databases are analyzed?
+        - VISUALIZATIONS: What charts/plots are created? (bar, line, scatter, etc.)
+        - ANALYSIS STEPS: What transformations/calculations?
+        - INSIGHTS: What questions does this answer?
+        - OUTPUT: What's the final deliverable?
+        """,
+                    "Command-Line Tool (CLI)": """
+        **CLI Tool Analysis:**
+        - COMMANDS: What commands are available?
+        - ARGUMENTS: What arguments/flags does it accept?
+        - USAGE EXAMPLES: Show actual command examples
+        - INPUT: What does it operate on?
+        - OUTPUT: What does it produce?
+        """,
+                    "Web Scraping / Automation": """
+        **Scraping Analysis:**
+        - TARGET SITES: What websites are scraped?
+        - DATA EXTRACTED: What specific data is collected?
+        - SCRAPING METHOD: BeautifulSoup, Selenium, API?
+        - STORAGE: Where is data saved?
+        - RATE LIMITING: Any delays/throttling?
+        """
+        }
+        
+        return questions.get(project_type, """
+        **General Analysis:**
+        - MAIN FUNCTIONALITY: What does this application do?
+        - KEY OPERATIONS: What are the main operations/processes?
+        - USER INTERACTION: How do users interact with it?
+        - DATA HANDLING: How is data processed?
+        """)
+
+    def _suggest_architecture(self, project_type: str) -> str:
+        """Suggest likely architecture based on project type"""
+        architectures = {
+            "Machine Learning / Data Science": "Pipeline (Data → Preprocessing → Training → Evaluation)",
+            "Flask Web Application (Backend API)": "MVC or REST API",
+            "FastAPI Web Application (Backend API)": "REST API with async support",
+            "Django Web Application": "MVT (Model-View-Template)",
+            "Frontend Web Application (React/Vue/Angular)": "Component-based",
+            "Command-Line Tool (CLI)": "Procedural or Command pattern",
+            "Data Analysis / Visualization": "Notebook-based or Pipeline"
+        }
+        return architectures.get(project_type, "Unknown - analyze from code")
+
     # ========================================================================
     # ENHANCED DOCUMENTATION GENERATION
     # ========================================================================
     
     def generate_documentation(self, state: DocumentationState) -> DocumentationState:
-        """Generate production-level documentation with diagrams and examples"""
+        """Generate project-type-specific documentation"""
         print(f"\n{'='*70}")
-        print(f"📝 GENERATING PRODUCTION DOCUMENTATION: {state['repo_name']}")
+        print(f"📝 GENERATING DOCUMENTATION: {state['repo_name']}")
         print(f"{'='*70}")
         
+        project_type = state.get('project_type', 'General Python Application')
         structure = state['file_structure']
         code_analysis = state['code_analysis']
         
-        # Prepare detailed code documentation
-        file_by_file_docs = self._generate_file_by_file_documentation(state['file_contents'], structure, code_analysis)
-        
-        doc_prompt = f"""Generate PRODUCTION-LEVEL, COMPREHENSIVE documentation for: **{state['repo_name']}**
-
-📋 TECHNICAL ANALYSIS:
-{state['initial_documentation']}
-
-📁 CODE STRUCTURE:
-{self._prepare_code_structure_summary(code_analysis)}
-
-💻 FILE-BY-FILE BREAKDOWN:
-{file_by_file_docs[:8000]}
-
-🎯 DOCUMENTATION REQUIREMENTS:
-
-Create professional, production-ready documentation following this EXACT structure:
-
-# {state['repo_name']}
-
-> **Professional Documentation**  
-> Generated: {datetime.now().strftime('%B %d, %Y')}
-
-## 📋 Table of Contents
-1. [Overview](#overview)
-2. [Features](#features)
-3. [Technology Stack](#technology-stack)
-4. [System Architecture](#system-architecture)
-5. [Installation & Setup](#installation--setup)
-6. [Usage Guide](#usage-guide)
-7. [Code Structure](#code-structure)
-8. [API Reference](#api-reference)
-9. [Database Schema](#database-schema)
-10. [Configuration](#configuration)
-11. [Development Guide](#development-guide)
-12. [Deployment](#deployment)
-
----
-
-## 🎯 Overview
-
-### Purpose
-[Explain what this project does and why it exists]
-
-### Key Features
-- Feature 1: Detailed explanation
-- Feature 2: Detailed explanation
-- Feature 3: Detailed explanation
-
-### Target Audience
-[Who should use this?]
-
-### Technology Summary
-[Brief tech stack overview]
-
----
-
-## ✨ Features
-
-### Feature 1: [Name]
-**Description:** Detailed explanation of what this feature does
-
-**Implementation:**
-```python
-# Show actual code from the repository
-def example_function():
-    pass
-```
-
-**Usage:**
-```bash
-# How to use this feature
-```
-
-[Repeat for ALL major features]
-
----
-
-## 🛠 Technology Stack
-
-### Core Technologies
-| Technology | Purpose | Version |
-|------------|---------|---------|
-| Python | Backend | 3.x |
-| Flask | Web Framework | 2.x |
-| SQLite | Database | 3.x |
-
-### Dependencies
-- **Package 1**: Purpose and why it's needed
-- **Package 2**: Purpose and why it's needed
-
----
-
-## 🏗 System Architecture
-
-### Architecture Diagram
-```mermaid
-graph TB
-    A[Client/Browser] -->|HTTP Request| B[Web Server]
-    B -->|Route| C[Application Logic]
-    C -->|Query| D[Database]
-    D -->|Data| C
-    C -->|Response| B
-    B -->|HTML/JSON| A
-    
-    subgraph "Application Layer"
-    C
-    end
-    
-    subgraph "Data Layer"
-    D
-    end
-```
-
-### Component Breakdown
-
-#### 1. Entry Point
-- **File**: `app.py` (or main file)
-- **Purpose**: Application initialization and configuration
-- **Key Responsibilities**:
-  - Initialize Flask app
-  - Configure routes
-  - Start server
-
-#### 2. Core Logic
-- **Files**: [List relevant files]
-- **Purpose**: Business logic implementation
-- **Functions**:
-  - `function1()`: Explanation
-  - `function2()`: Explanation
-
-#### 3. Data Layer
-- **Files**: [List database-related files]
-- **Purpose**: Data persistence and retrieval
-
-### Data Flow Diagram
-```mermaid
-sequenceDiagram
-    participant User
-    participant Server
-    participant Logic
-    participant Database
-    
-    User->>Server: HTTP Request
-    Server->>Logic: Process Request
-    Logic->>Database: Query Data
-    Database-->>Logic: Return Results
-    Logic-->>Server: Formatted Response
-    Server-->>User: HTTP Response
-```
-
----
-
-## 🚀 Installation & Setup
-
-### Prerequisites
-```bash
-# System requirements
-- Python 3.7+
-- pip package manager
-- [Other requirements]
-```
-
-### Step-by-Step Installation
-
-#### 1. Clone Repository
-```bash
-git clone [repository-url]
-cd {state['repo_name']}
-```
-
-#### 2. Create Virtual Environment
-```bash
-python -m venv venv
-source venv/bin/activate  # On Windows: venv\\Scripts\\activate
-```
-
-#### 3. Install Dependencies
-```bash
-pip install -r requirements.txt
-```
-
-#### 4. Configuration
-```bash
-# Copy environment template
-cp .env.example .env
-
-# Edit configuration
-nano .env
-```
-
-#### 5. Initialize Database (if applicable)
-```bash
-python init_db.py
-```
-
-#### 6. Run Application
-```bash
-python app.py
-```
-
-### Verification
-```bash
-# Test the installation
-curl http://localhost:5000
-```
-
----
-
-## 📘 Usage Guide
-
-### Basic Usage
-
-#### Example 1: [Use Case]
-```python
-# Show real code example from repository
-from app import create_app
-
-app = create_app()
-app.run()
-```
-
-**Expected Output:**
-```
-Server running on http://localhost:5000
-```
-
-#### Example 2: [Another Use Case]
-[Provide detailed usage examples]
-
-### Advanced Usage
-
-#### Custom Configuration
-```python
-# Show how to customize
-```
-
-#### Integration Example
-```python
-# Show how to integrate with other systems
-```
-
----
-
-## 📂 Code Structure
-
-### Project Layout
-```
-{state['repo_name']}/
-├── app.py                 # Main application entry
-├── config.py              # Configuration settings
-├── requirements.txt       # Dependencies
-├── models/                # Data models
-│   └── user.py
-├── routes/                # API routes
-│   └── api.py
-├── templates/             # HTML templates
-│   └── index.html
-└── static/                # Static files
-    ├── css/
-    └── js/
-```
-
-### File-by-File Documentation
-
-{self._format_file_documentation(code_analysis, state['file_contents'])}
-
-### Code Flow Diagram
-```mermaid
-flowchart TD
-    Start([Application Start]) --> Init[Initialize App]
-    Init --> LoadConfig[Load Configuration]
-    LoadConfig --> ConnectDB[Connect to Database]
-    ConnectDB --> RegisterRoutes[Register Routes]
-    RegisterRoutes --> StartServer[Start Server]
-    StartServer --> Listen[Listen for Requests]
-    Listen --> Process[Process Request]
-    Process --> Response[Send Response]
-    Response --> Listen
-```
-
----
-
-## 🔌 API Reference
-
-[IF APIs exist, document them. Otherwise, state "No REST API endpoints detected"]
-
-### Endpoints
-
-#### GET /api/endpoint
-**Description:** What this endpoint does
-
-**Request:**
-```http
-GET /api/endpoint HTTP/1.1
-Host: localhost:5000
-```
-
-**Response:**
-```json
-{{
-  "status": "success",
-  "data": {{}}
-}}
-```
-
-[Document ALL endpoints found in code_analysis]
-
----
-
-## 🗄 Database Schema
-
-[IF database models exist, document them. Otherwise, state "No database schema detected"]
-
-### Entity Relationship Diagram
-```mermaid
-erDiagram
-    USER ||--o{{ POST : creates
-    USER {{
-        int id
-        string username
-        string email
-    }}
-    POST {{
-        int id
-        string title
-        text content
-        int user_id
-    }}
-```
-
-### Tables
-
-#### users
-| Column | Type | Description |
-|--------|------|-------------|
-| id | INTEGER | Primary key |
-| username | TEXT | User's name |
-
-[Document ALL models from code_analysis]
-
----
-
-## ⚙️ Configuration
-
-### Environment Variables
-```env
-# Application Settings
-APP_ENV=development
-DEBUG=True
-SECRET_KEY=your-secret-key
-
-# Database
-DATABASE_URL=sqlite:///app.db
-
-# Server
-HOST=0.0.0.0
-PORT=5000
-```
-
-### Configuration Files
-- `config.py`: Main configuration
-- `.env`: Environment-specific settings
-
----
-
-## 👨‍💻 Development Guide
-
-### Setting Up Development Environment
-```bash
-# Install dev dependencies
-pip install -r requirements-dev.txt
-
-# Run in development mode
-export FLASK_ENV=development
-flask run
-```
-
-### Code Style
-- Follow PEP 8 for Python
-- Use meaningful variable names
-- Add docstrings to functions
-
-### Testing
-```bash
-# Run tests
-pytest tests/
-
-# With coverage
-pytest --cov=app tests/
-```
-
----
-
-## 🚢 Deployment
-
-### Production Deployment
-
-#### Using Gunicorn
-```bash
-gunicorn app:app --bind 0.0.0.0:8000
-```
-
-#### Using Docker
-```dockerfile
-FROM python:3.9
-WORKDIR /app
-COPY requirements.txt .
-RUN pip install -r requirements.txt
-COPY . .
-CMD ["python", "app.py"]
-```
-
-### Environment Setup
-```bash
-# Set production environment
-export APP_ENV=production
-export DEBUG=False
-```
-
----
-
-## 📊 Performance Considerations
-
-### Optimization Tips
-1. Enable caching
-2. Use database indexing
-3. Optimize queries
-
-### Monitoring
-- Log important events
-- Track errors
-- Monitor resource usage
-
----
-
-## 🤝 Contributing
-
-### How to Contribute
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Submit a pull request
-
-### Code Review Process
-- All changes require review
-- Tests must pass
-- Follow code style guidelines
-
----
-
-## 📄 License
-
-[Include license information if found]
-
----
-
-## 📞 Support
-
-For issues and questions:
-- Create an issue on GitHub
-- Check documentation
-- Review existing issues
-
----
-
-**CRITICAL REQUIREMENTS:**
-1. Use ACTUAL code from the repository - not placeholders
-2. All Mermaid diagrams must be syntactically correct
-3. Explain WHAT the code does and HOW it works
-4. Include working examples from actual files
-5. Document EVERY important file
-6. Make diagrams reflect actual architecture
-7. Be specific about versions, paths, and commands
-8. Production-ready quality - clear, complete, professional
-"""
+        # Create project-specific documentation prompt
+        doc_prompt = self._create_enhanced_documentation_prompt(
+            state, project_type, structure, code_analysis
+        )
 
         try:
-            print("🤖 Generating production documentation...")
+            print(f"🤖 Generating {project_type} documentation...")
             print("⏳ This may take 30-60 seconds...")
             response = self.documenter_llm.invoke([HumanMessage(content=doc_prompt)])
             state["reviewed_documentation"] = response.content
@@ -1602,41 +1605,565 @@ For issues and questions:
         
         return state
 
+    def _create_enhanced_documentation_prompt(self, state, project_type, structure, code_analysis):
+        """Create project-type-specific documentation prompt"""
+        
+        # Get actual code samples
+        main_file = structure.get('main_files', [''])[0] if structure.get('main_files') else ''
+        main_code = state['file_contents'].get(main_file, '')[:3000] if main_file else ''
+        
+        template = self._get_documentation_template_for_type(project_type, state['repo_name'], code_analysis)
+        
+        prompt = f"""Generate PRODUCTION-QUALITY, PROJECT-SPECIFIC documentation for: **{state['repo_name']}**
+
+        📋 PROJECT TYPE: {project_type}
+
+        🔬 TECHNICAL ANALYSIS COMPLETED:
+        {state['initial_documentation'][:15000]}
+
+        💻 MAIN FILE CODE:
+        ```python
+        {main_code}
+        ```
+
+        📊 CODE METRICS:
+        - Functions: {len(code_analysis.get('all_functions', []))}
+        - Classes: {len(code_analysis.get('all_classes', []))}
+        - API Endpoints: {len(code_analysis.get('api_endpoints', []))}
+        - Entry Points: {', '.join(code_analysis.get('entry_points', [])[:3])}
+
+        🎯 DOCUMENTATION TEMPLATE:
+
+        {template}
+
+        ---
+
+        🚨 CRITICAL REQUIREMENTS:
+
+        1. **REAL CODE ONLY** - Use ACTUAL function/class names, file paths, code snippets from the repository
+        2. **NO PLACEHOLDERS** - Never write "your_function()", "example.py", or "sample_data"
+        3. **WORKING EXAMPLES** - Every code example must be runnable
+        4. **SPECIFIC COMMANDS** - Show exact commands with real file names
+        5. **ACTUAL ENDPOINTS** - Use real API routes from code_analysis
+        6. **REAL CONFIGURATION** - Show actual config variables from code
+        7. **PRECISE EXPLANATIONS** - Explain HOW and WHY, not just WHAT
+
+        VALIDATION CHECKLIST (verify before submitting):
+        ✅ Every code block contains real code from the repo
+        ✅ Every file path mentioned actually exists
+        ✅ Every function/class name is from actual code
+        ✅ All installation commands will actually work
+        ✅ All examples can be copy-pasted and run
+        ✅ Mermaid diagrams are syntactically correct
+        ✅ No generic placeholders anywhere
+
+        Generate COMPLETE, DETAILED, PRODUCTION-READY documentation NOW."""
+
+        return prompt
+
+    def _get_documentation_template_for_type(self, project_type, repo_name, code_analysis):
+        """Return project-type-specific documentation template"""
+        
+        if "Machine Learning" in project_type or "Deep Learning" in project_type:
+            return self._ml_documentation_template(repo_name, code_analysis)
+        elif "Flask" in project_type or "FastAPI" in project_type:
+            return self._api_documentation_template(repo_name, code_analysis, project_type)
+        elif "CLI" in project_type:
+            return self._cli_documentation_template(repo_name, code_analysis)
+        elif "Data Analysis" in project_type:
+            return self._data_analysis_template(repo_name, code_analysis)
+        else:
+            return self._general_documentation_template(repo_name, code_analysis)
+
+    def _ml_documentation_template(self, repo_name, code_analysis):
+        """ML/DS project documentation template"""
+        return f"""
+            # {repo_name} - Machine Learning Documentation
+
+            ## 📋 Table of Contents
+            1. [Overview](#overview)
+            2. [Problem Statement](#problem-statement)
+            3. [Dataset](#dataset)
+            4. [Methodology](#methodology)
+            5. [Installation](#installation)
+            6. [Usage](#usage)
+            7. [Model Details](#model-details)
+            8. [Results](#results)
+            9. [Code Structure](#code-structure)
+
+            ---
+
+            ## 🎯 Overview
+
+            ### Project Goal
+            [What is being predicted/classified? Be SPECIFIC]
+
+            ### Problem Type
+            - [ ] Classification
+            - [ ] Regression
+            - [ ] Clustering
+            - [ ] Other: ___
+
+            ### Target Variable
+            **Target:** `[actual target column name]`
+
+            ### Performance
+            - **Accuracy/Score:** [if mentioned in code]
+            - **Evaluation Metric:** [actual metric used]
+
+            ---
+
+            ## 📊 Dataset
+
+            ### Data Source
+            [Where does the data come from? Show actual file paths or URLs]
+
+            ### Features Used
+            Show ACTUAL features from the code:
+
+            | Feature Name | Description | Type | Example Value |
+            |--------------|-------------|------|---------------|
+            | [real_feature_1] | [purpose] | numeric/categorical | [value] |
+            | [real_feature_2] | [purpose] | numeric/categorical | [value] |
+
+            ### Data Loading
+            ```python
+            # ACTUAL data loading code from repository
+            [paste real code here]
+            ```
+
+            ---
+
+            ## 🔬 Methodology
+
+            ### 1. Data Preprocessing
+
+            Show ACTUAL preprocessing steps:
+
+            ```python
+            # Real preprocessing code
+            [actual code from repo]
+            ```
+
+            **Steps:**
+            1. [Actual step 1 - cite function]
+            2. [Actual step 2 - cite function]
+            3. [Actual step 3 - cite function]
+
+            ### 2. Feature Engineering
+
+            ```python
+            # Actual feature engineering code
+            [real code]
+            ```
+
+            ### 3. Model Training
+
+            **Algorithm Used:** [RandomForestClassifier/LogisticRegression/etc. - from actual code]
+
+            ```python
+            # ACTUAL model training code with real hyperparameters
+            [real training code]
+            ```
+
+            **Hyperparameters:**
+            - `parameter1`: [actual value]
+            - `parameter2`: [actual value]
+
+            ### 4. Model Evaluation
+
+            ```python
+            # Real evaluation code
+            [actual metrics calculation]
+            ```
+
+            ---
+
+            ## 🚀 Installation
+
+            ### Prerequisites
+            ```bash
+            Python 3.x
+            [list actual requirements]
+            ```
+
+            ### Setup
+            ```bash
+            # Clone repository
+            git clone [url]
+            cd {repo_name}
+
+            # Install dependencies (use ACTUAL requirements file name)
+            pip install -r requirements.txt
+            ```
+
+            ---
+
+            ## 📘 Usage
+
+            ### Training the Model
+
+            ```bash
+            # Show ACTUAL command to train
+            python [actual_training_file.py]
+            ```
+
+            ### Making Predictions
+
+            ```python
+            # REAL prediction code with actual function/class names
+            from [actual_module] import [actual_class]
+
+            # Use REAL feature names
+            data = [[actual, feature, values]]
+            prediction = model.predict(data)
+            ```
+
+            ### Example
+
+            ```python
+            # Complete working example from repository
+            [full example code]
+            ```
+
+            ---
+
+            ## 🤖 Model Details
+
+            ### Architecture
+            [Describe actual model architecture from code]
+
+            ### Training Process
+            1. [Step 1 from actual code]
+            2. [Step 2 from actual code]
+            3. [Step 3 from actual code]
+
+            ### Model Persistence
+            ```python
+            # How model is saved/loaded (actual code)
+            [real save/load code]
+            ```
+
+            ---
+
+            ## 📈 Results
+
+            [Include any results/metrics from code or comments]
+
+            ---
+
+            ## 📂 Code Structure
+
+            ```
+            {repo_name}/
+            ├── [actual_file_1.py]     # [Purpose from analysis]
+            ├── [actual_file_2.py]     # [Purpose from analysis]
+            └── [actual_file_3.py]     # [Purpose from analysis]
+            ```
+
+            ### Key Files
+
+            #### `[actual_main_file.py]`
+            [Explanation of what this file does]
+
+            **Key Functions:**
+            - `actual_function_1()`: [What it does]
+            - `actual_function_2()`: [What it does]
+            """
+
+    def _api_documentation_template(self, repo_name, code_analysis, project_type):
+            """API documentation template"""
+            endpoints = code_analysis.get('api_endpoints', [])
+            return f"""
+            # {repo_name} - API Documentation
+
+            ## 📋 Table of Contents
+            1. [Overview](#overview)
+            2. [API Endpoints](#api-endpoints)
+            3. [Installation](#installation)
+            4. [Running the API](#running-the-api)
+            5. [Authentication](#authentication)
+            6. [Database Schema](#database-schema)
+            7. [Code Structure](#code-structure)
+
+            ---
+
+            ## 🎯 Overview
+
+            **Framework:** {project_type}
+            **Base URL:** `http://localhost:[port]`
+            **Endpoints:** {len(endpoints)} routes
+
+            ---
+
+            ## 🔌 API Endpoints
+
+            ### Complete Endpoint List
+
+            {chr(10).join(f"- `{endpoint}`" for endpoint in endpoints[:20])}
+
+            ### Detailed Documentation
+
+            {chr(10).join(f'''
+            #### `{endpoint}`
+
+            **Method:** [GET/POST/PUT/DELETE]
+            **Description:** [What this endpoint does - from code analysis]
+
+            **Request:**
+            ```bash
+            curl -X [METHOD] http://localhost:5000{endpoint} \\
+            -H "Content-Type: application/json" \\
+            -d '[actual request body format]'
+            ```
+
+            **Response:**
+            ```json
+            {{
+            "example": "from actual code"
+            }}
+            ```
+
+            **Code Implementation:**
+            ```python
+            # Actual route handler code
+            [paste real code]
+            ```
+
+            ---
+            ''' for endpoint in endpoints[:8])}
+
+            ---
+
+            ## 🚀 Installation
+
+            ```bash
+            # Clone
+            git clone [url]
+            cd {repo_name}
+
+            # Install (use ACTUAL requirements file)
+            pip install -r requirements.txt
+
+            # Setup database (if applicable)
+            [actual setup commands]
+            ```
+
+            ---
+
+            ## ▶️ Running the API
+
+            ```bash
+            # ACTUAL command to start server
+            python [actual_main_file.py]
+            ```
+
+            Server will start on: `http://localhost:[actual_port]`
+
+            ---
+
+            ## 🗄️ Database Schema
+
+            ### Models
+
+            {chr(10).join(f'''
+            #### `{model}`
+            [Description from code]
+
+            **Fields:**
+            - [actual fields from model class]
+
+            **Relationships:**
+            - [actual relationships]
+            ''' for model in code_analysis.get('database_models', [])[:5])}
+
+            ---
+
+            ## 📂 Code Structure
+
+            [Show actual project structure with real files]
+            """
+
+    def _cli_documentation_template(self, repo_name, code_analysis):
+        """CLI tool documentation template"""
+        return f"""
+# {repo_name} - Command-Line Tool
+
+## 📋 Overview
+
+[Description of what the CLI tool does]
+
+## 🚀 Installation
+
+```bash
+pip install -r requirements.txt
+```
+
+## 📘 Usage
+
+### Basic Command
+
+```bash
+python [actual_main_file.py] [arguments]
+```
+
+### Available Commands
+
+[List ACTUAL commands from argparse/click in code]
+
+### Examples
+
+```bash
+# Example 1 (REAL command)
+python [actual_file] [actual_args]
+
+# Example 2 (REAL command)
+python [actual_file] [actual_args]
+```
+
+## ⚙️ Options
+
+[Show ACTUAL CLI options from code]
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| [actual_flag] | [purpose] | [value] |
+"""
+
+    def _data_analysis_template(self, repo_name, code_analysis):
+        """Data analysis documentation template"""
+        return f"""
+# {repo_name} - Data Analysis
+
+## 📊 Analysis Overview
+
+[What data is being analyzed and why]
+
+## 📂 Data Sources
+
+[Actual data files or sources from code]
+
+## 📈 Visualizations
+
+[List actual plots/charts created in code]
+
+## 🔬 Analysis Steps
+
+1. [Actual step 1 from code]
+2. [Actual step 2 from code]
+3. [Actual step 3 from code]
+
+## 🚀 Running the Analysis
+
+```bash
+python [actual_file.py]
+```
+
+## 📉 Results
+
+[Show any results or insights from code]
+"""
+
+    def _general_documentation_template(self, repo_name, code_analysis):
+        """General project documentation template"""
+        return f"""
+# {repo_name}
+
+## 📋 Table of Contents
+1. [Overview](#overview)
+2. [Features](#features)
+3. [Installation](#installation)
+4. [Usage](#usage)
+5. [Code Structure](#code-structure)
+6. [Configuration](#configuration)
+
+---
+
+## 🎯 Overview
+
+[Specific description from analysis]
+
+## ✨ Features
+
+{chr(10).join(f"- Feature {i+1}: [Description] - `{func}()`" for i, func in enumerate(code_analysis.get('all_functions', [])[:10]))}
+
+## 🚀 Installation
+
+```bash
+git clone [url]
+cd {repo_name}
+pip install -r requirements.txt
+```
+
+## 📘 Usage
+
+```python
+# ACTUAL usage from repository
+[real code examples]
+```
+
+## 📂 Code Structure
+
+[Show actual structure with real files and their purposes]
+"""
+
     # ========================================================================
     # REVIEW & ENHANCEMENT
     # ========================================================================
     
     def review_documentation(self, state: DocumentationState) -> DocumentationState:
-        """Review and enhance documentation quality"""
+        """Review with focus on accuracy and completeness"""
         print(f"\n{'='*70}")
         print(f"🔍 REVIEWING DOCUMENTATION: {state['repo_name']}")
         print(f"{'='*70}")
         
-        review_prompt = f"""Review and ENHANCE this documentation for PRODUCTION quality.
+        review_prompt = f"""Review and ENHANCE this documentation to PRODUCTION quality.
+
+PROJECT: {state['repo_name']}
+TYPE: {state.get('project_type', 'Unknown')}
 
 CURRENT DOCUMENTATION:
 {state['reviewed_documentation'][:20000]}
 
-REVIEW CHECKLIST:
-✅ Technical Accuracy: All code examples are correct
-✅ Completeness: All sections have detailed content
-✅ Mermaid Diagrams: Syntactically valid and accurate
-✅ Code Examples: Real code from repository
-✅ Clarity: Professional, clear explanations
-✅ Structure: Logical flow and organization
-✅ Details: Sufficient depth in all sections
+🔍 REVIEW CHECKLIST:
 
-ENHANCEMENT REQUIREMENTS:
-1. Fix any technical errors
-2. Add missing details to thin sections
-3. Verify Mermaid syntax is correct
-4. Ensure all code examples are from actual files
-5. Improve explanations for complex concepts
-6. Make diagrams more detailed and accurate
-7. Add any missing important information
-8. Ensure professional tone throughout
+1. **Accuracy Verification**
+   ✅ All file names are real (not "example.py" or "your_file.py")
+   ✅ All function names exist in the codebase
+   ✅ All commands are runnable
+   ✅ All code snippets are from actual repository
+   ✅ All paths are correct
 
-Return the ENHANCED, production-ready documentation."""
+2. **Completeness Check**
+   ✅ Installation steps are complete and testable
+   ✅ Usage examples are comprehensive
+   ✅ All major features are documented
+   ✅ Configuration is explained
+   ✅ API endpoints (if any) are all listed
+
+3. **Quality Standards**
+   ✅ Explanations are clear and detailed
+   ✅ Code examples include comments
+   ✅ Mermaid diagrams are syntactically correct
+   ✅ No placeholder text remains
+   ✅ Technical depth is appropriate
+
+4. **Practical Usability**
+   ✅ A new developer can immediately use this
+   ✅ Setup instructions will actually work
+   ✅ Examples can be copy-pasted and run
+   ✅ Troubleshooting guidance (if needed)
+
+🎯 ENHANCEMENT TASKS:
+
+1. Replace ANY remaining placeholders with specifics
+2. Add more detail to thin sections
+3. Include more code examples where helpful
+4. Ensure all diagrams render correctly
+5. Add "Quick Start" if missing
+6. Verify technical accuracy of all claims
+
+Return ENHANCED, PRODUCTION-READY documentation."""
 
         try:
             print("🤖 Reviewing and enhancing...")
@@ -1656,7 +2183,7 @@ Return the ENHANCED, production-ready documentation."""
     # ========================================================================
     
     def save_documentation(self, state: DocumentationState) -> DocumentationState:
-        """Save comprehensive documentation"""
+        """Save comprehensive documentation with metadata"""
         print(f"\n{'='*70}")
         print(f"💾 SAVING DOCUMENTATION: {state['repo_name']}")
         print(f"{'='*70}")
@@ -1668,49 +2195,56 @@ Return the ENHANCED, production-ready documentation."""
         try:
             structure = state.get('file_structure', {})
             code_analysis = state.get('code_analysis', {})
+            project_type = state.get('project_type', 'Unknown')
             
             # Create comprehensive documentation
             full_doc = f"""{state['final_documentation']}
 
 ---
 
-## 📊 Technical Metrics
+## 📊 Project Metrics
+
+**Generated:** {datetime.now().strftime('%B %d, %Y at %H:%M:%S')}
+
+**Project Type:** {project_type}
 
 **Repository Statistics:**
-- Total Files: {structure.get('total_files', 'N/A')}
+- Total Files: {structure.get('total_files', 0)}
 - Python Files: {len(code_analysis.get('python_files', {}))}
-- JavaScript Files: {len(code_analysis.get('javascript_files', {}))}
+- JavaScript/TypeScript Files: {len(code_analysis.get('javascript_files', {}))}
 - Total Functions: {len(code_analysis.get('all_functions', []))}
 - Total Classes: {len(code_analysis.get('all_classes', []))}
 - Entry Points: {len(code_analysis.get('entry_points', []))}
+- API Endpoints: {len(code_analysis.get('api_endpoints', []))}
+- Database Models: {len(code_analysis.get('database_models', []))}
+- Test Files: {len(code_analysis.get('test_files', []))}
 
-**Files by Category:**
+**Language Distribution:**
 """
-            for ext, count in sorted(structure.get('by_extension', {}).items()):
+            for ext, count in sorted(structure.get('by_extension', {}).items(), key=lambda x: x[1], reverse=True)[:10]:
                 full_doc += f"\n- `{ext}`: {count} file(s)"
             
-            if code_analysis.get('api_endpoints'):
-                full_doc += f"\n\n**API Endpoints Detected:** {len(code_analysis['api_endpoints'])}"
-            
-            if code_analysis.get('database_models'):
-                full_doc += f"\n**Database Models:** {', '.join(code_analysis['database_models'])}"
+            if code_analysis.get('decorators_used'):
+                full_doc += f"\n\n**Decorators Used:** {', '.join(sorted(code_analysis['decorators_used'])[:10])}"
             
             full_doc += f"""
 
 ---
 
-## 🔗 Quick Links
+## 🔗 Quick Navigation
 
-- **Repository Structure:** See [Code Structure](#code-structure) section
-- **Setup Guide:** See [Installation & Setup](#installation--setup)
-- **API Documentation:** See [API Reference](#api-reference)
-- **Configuration:** See [Configuration](#configuration)
+- [Overview](#overview)
+- [Installation](#installation)
+- [Usage](#usage)
+- [API Reference](#api-endpoints) (if applicable)
+- [Code Structure](#code-structure)
 
 ---
 
-*📅 Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}*  
-*🤖 AI-Powered Documentation Generator v2.0*  
-*⭐ Production-Ready Documentation*
+*📅 Documentation Version: 3.0*  
+*🤖 AI-Powered Documentation Generator with Enhanced Prompts*  
+*⭐ Production-Ready, Project-Specific Documentation*  
+*🎯 Project Type: {project_type}*
 """
             
             with open(file_path, "w", encoding="utf-8") as f:
@@ -1720,6 +2254,7 @@ Return the ENHANCED, production-ready documentation."""
             file_size = file_path.stat().st_size
             print(f"✅ Documentation saved to {file_path}")
             print(f"📄 File size: {file_size:,} bytes ({file_size/1024:.1f} KB)")
+            print(f"🎯 Project Type: {project_type}")
             
         except Exception as e:
             print(f"❌ Failed to save documentation: {e}")
@@ -1728,276 +2263,97 @@ Return the ENHANCED, production-ready documentation."""
         return state
 
     # ========================================================================
-    # HELPER METHODS
+    # FALLBACK METHODS
     # ========================================================================
-    
-    def _prepare_detailed_file_listing(self, file_contents: Dict, structure: Dict, code_analysis: Dict) -> str:
-        """Prepare detailed file listing with metadata"""
-        listing = []
-        
-        if structure['main_files']:
-            listing.append("\n🎯 **ENTRY POINT FILES:**")
-            for f in structure['main_files']:
-                size = len(file_contents.get(f, ''))
-                listing.append(f"  📄 {f} ({size:,} bytes)")
-                if f in code_analysis.get('python_files', {}):
-                    funcs = code_analysis['python_files'][f].get('functions', [])
-                    if funcs:
-                        listing.append(f"     └─ Functions: {', '.join([fn['name'] for fn in funcs[:5]])}")
-        
-        if structure['backend_files']:
-            listing.append("\n⚙️ **BACKEND/LOGIC FILES:**")
-            for f in structure['backend_files'][:10]:
-                size = len(file_contents.get(f, ''))
-                listing.append(f"  📄 {f} ({size:,} bytes)")
-        
-        if structure['frontend_files']:
-            listing.append("\n🎨 **FRONTEND FILES:**")
-            for f in structure['frontend_files'][:8]:
-                listing.append(f"  📄 {f}")
-        
-        if structure['config_files']:
-            listing.append("\n⚙️ **CONFIGURATION:**")
-            for f in structure['config_files']:
-                listing.append(f"  📄 {f}")
-        
-        if structure['database_files']:
-            listing.append("\n🗄️ **DATABASE:**")
-            for f in structure['database_files']:
-                listing.append(f"  📄 {f}")
-        
-        return "\n".join(listing)
-    
-    def _prepare_code_structure_summary(self, code_analysis: Dict) -> str:
-        """Prepare code structure summary"""
-        summary = []
-        
-        py_files = len(code_analysis.get('python_files', {}))
-        js_files = len(code_analysis.get('javascript_files', {}))
-        
-        summary.append(f"**Code Files:** {py_files} Python, {js_files} JavaScript/TypeScript")
-        summary.append(f"**Functions:** {len(code_analysis.get('all_functions', []))} total")
-        summary.append(f"**Classes:** {len(code_analysis.get('all_classes', []))} total")
-        
-        if code_analysis.get('entry_points'):
-            summary.append(f"**Entry Points:** {', '.join(code_analysis['entry_points'])}")
-        
-        if code_analysis.get('api_endpoints'):
-            summary.append(f"**API Endpoints:** {len(code_analysis['api_endpoints'])} detected")
-            summary.append(f"  Routes: {', '.join(code_analysis['api_endpoints'][:5])}")
-        
-        if code_analysis.get('database_models'):
-            summary.append(f"**Database Models:** {', '.join(code_analysis['database_models'])}")
-        
-        # Top imports
-        all_imports = list(code_analysis.get('all_imports', set()))[:10]
-        if all_imports:
-            summary.append(f"**Key Dependencies:** {', '.join(all_imports)}")
-        
-        return "\n".join(summary)
-    
-    def _get_key_file_contents(self, file_contents: Dict, structure: Dict, code_analysis: Dict) -> str:
-        """Get contents of key files with analysis"""
-        contents = []
-        
-        # Get main files first
-        priority_files = structure['main_files'][:2] + structure['backend_files'][:3]
-        
-        for file_path in priority_files[:5]:
-            if file_path in file_contents:
-                content = file_contents[file_path]
-                
-                # Add file header
-                contents.append(f"\n{'='*60}")
-                contents.append(f"📄 **{file_path}**")
-                contents.append(f"{'='*60}")
-                
-                # Add analysis if available
-                if file_path in code_analysis.get('python_files', {}):
-                    analysis = code_analysis['python_files'][file_path]
-                    if analysis.get('file_docstring'):
-                        contents.append(f"\n**Description:** {analysis['file_docstring'][:200]}")
-                    
-                    if analysis.get('functions'):
-                        contents.append(f"\n**Functions:** {len(analysis['functions'])}")
-                        for func in analysis['functions'][:3]:
-                            contents.append(f"  - `{func['name']}()`: {func['docstring'][:100]}")
-                    
-                    if analysis.get('classes'):
-                        contents.append(f"\n**Classes:** {len(analysis['classes'])}")
-                        for cls in analysis['classes'][:2]:
-                            contents.append(f"  - `{cls['name']}`: {cls['docstring'][:100]}")
-                
-                # Add code preview
-                contents.append(f"\n**Code Preview:**")
-                contents.append("```python" if file_path.endswith('.py') else "```")
-                contents.append(content[:2000])
-                if len(content) > 2000:
-                    contents.append("\n... [truncated]")
-                contents.append("```\n")
-        
-        return "\n".join(contents)
-    
-    def _generate_file_by_file_documentation(self, file_contents: Dict, structure: Dict, code_analysis: Dict) -> str:
-        """Generate detailed file-by-file documentation"""
-        docs = []
-        
-        # Document Python files
-        for file_path, analysis in code_analysis.get('python_files', {}).items():
-            docs.append(f"\n### 📄 `{file_path}`\n")
-            
-            if analysis.get('file_docstring'):
-                docs.append(f"**Purpose:** {analysis['file_docstring']}\n")
-            
-            if analysis.get('imports'):
-                docs.append(f"**Dependencies:** {', '.join(analysis['imports'][:5])}\n")
-            
-            if analysis.get('classes'):
-                docs.append("**Classes:**")
-                for cls in analysis['classes']:
-                    docs.append(f"- `{cls['name']}`: {cls['docstring']}")
-                    if cls.get('methods'):
-                        docs.append(f"  - Methods: {', '.join(cls['methods'][:5])}")
-                docs.append("")
-            
-            if analysis.get('functions'):
-                docs.append("**Functions:**")
-                for func in analysis['functions'][:5]:
-                    docs.append(f"- `{func['name']}({', '.join(func['args'])})`")
-                    docs.append(f"  - {func['docstring']}")
-                docs.append("")
-        
-        return "\n".join(docs)
-    
-    def _format_file_documentation(self, code_analysis: Dict, file_contents: Dict) -> str:
-        """Format file documentation for final output"""
-        docs = []
-        
-        for file_path, analysis in list(code_analysis.get('python_files', {}).items())[:10]:
-            docs.append(f"\n#### 📄 `{file_path}`\n")
-            docs.append(f"**Purpose:** {analysis.get('file_docstring', 'Core application file')}\n")
-            
-            if analysis.get('functions'):
-                docs.append("**Key Functions:**\n")
-                for func in analysis['functions'][:3]:
-                    args_str = ', '.join(func['args'])
-                    docs.append(f"- **`{func['name']}({args_str})`**")
-                    docs.append(f"  - Description: {func['docstring']}")
-                    docs.append(f"  - Line: {func['line_number']}\n")
-            
-            if analysis.get('classes'):
-                docs.append("**Classes:**\n")
-                for cls in analysis['classes']:
-                    docs.append(f"- **`{cls['name']}`**")
-                    docs.append(f"  - {cls['docstring']}")
-                    docs.append(f"  - Methods: {', '.join(cls['methods'][:5])}\n")
-        
-        return "\n".join(docs)
     
     def _generate_comprehensive_fallback_analysis(self, state: DocumentationState, structure: Dict, code_analysis: Dict) -> str:
         """Generate comprehensive fallback analysis"""
+        project_type = state.get('project_type', 'Unknown')
         return f"""# Technical Analysis: {state['repo_name']}
 
+## Project Type
+{project_type}
+
 ## Project Overview
-This repository contains {structure['total_files']} files organized across multiple directories.
+This repository contains {structure['total_files']} files implementing a {project_type} solution.
 
 ## Technology Stack
-- **Languages:** {', '.join(structure.get('by_extension', {}).keys())}
+- **Primary Language:** {self.file_helper.detect_primary_language(structure)}
 - **Files:** {structure['total_files']} total
 - **Entry Points:** {', '.join(code_analysis.get('entry_points', ['Not detected']))}
 
 ## Code Structure
-{self._prepare_code_structure_summary(code_analysis)}
-
-## File Organization
-{self._prepare_detailed_file_listing(state['file_contents'], structure, code_analysis)}
-
-## Key Components
-### Backend Files: {len(structure['backend_files'])}
-### Frontend Files: {len(structure['frontend_files'])}
-### Configuration: {len(structure['config_files'])}
-
-## Detected Features
 - Functions: {len(code_analysis.get('all_functions', []))}
 - Classes: {len(code_analysis.get('all_classes', []))}
 - API Endpoints: {len(code_analysis.get('api_endpoints', []))}
+- Database Models: {len(code_analysis.get('database_models', []))}
+
+## File Organization
+- Backend Files: {len(structure['backend_files'])}
+- Frontend Files: {len(structure['frontend_files'])}
+- Configuration: {len(structure['config_files'])}
+- Tests: {len(code_analysis.get('test_files', []))}
+
+## Key Components
+{chr(10).join(f"- {func}" for func in code_analysis.get('all_functions', [])[:20])}
 """
     
     def _generate_comprehensive_fallback_docs(self, state: DocumentationState) -> str:
         """Generate comprehensive fallback documentation"""
         structure = state.get('file_structure', {})
         code_analysis = state.get('code_analysis', {})
+        project_type = state.get('project_type', 'Unknown')
         
         return f"""# {state['repo_name']} - Documentation
 
-## 📋 Table of Contents
-1. [Overview](#overview)
-2. [Features](#features)
-3. [Installation](#installation)
-4. [Usage](#usage)
-5. [Code Structure](#code-structure)
-6. [Configuration](#configuration)
+**Project Type:** {project_type}
 
-## 🎯 Overview
+## 📋 Overview
 
 {state.get('initial_documentation', 'A software project with multiple components.')}
 
 ### Quick Stats
+- **Project Type:** {project_type}
 - **Total Files:** {structure.get('total_files', 0)}
-- **Languages:** {', '.join(structure.get('by_extension', {}).keys())}
+- **Primary Language:** {self.file_helper.detect_primary_language(structure)}
 - **Functions:** {len(code_analysis.get('all_functions', []))}
 - **Classes:** {len(code_analysis.get('all_classes', []))}
 
 ## ✨ Features
 
-Based on code analysis, this project includes:
-- {len(structure.get('main_files', []))} entry point(s)
-- {len(structure.get('backend_files', []))} backend file(s)
-- {len(structure.get('frontend_files', []))} frontend file(s)
-- {len(code_analysis.get('api_endpoints', []))} API endpoint(s)
+Based on code analysis:
+{chr(10).join(f"- {func}()" for func in code_analysis.get('all_functions', [])[:15])}
 
 ## 🚀 Installation
 
-### Prerequisites
 ```bash
-# Check for requirements.txt or package.json
-```
-
-### Setup
-```bash
-# Clone repository
 git clone [repository-url]
 cd {state['repo_name']}
-
-# Install dependencies
-pip install -r requirements.txt  # or npm install
+pip install -r requirements.txt
 ```
 
 ## 📘 Usage
 
-### Running the Application
+Entry points detected: {', '.join(code_analysis.get('entry_points', ['app.py']))}
+
 ```bash
-# Check main files: {', '.join(structure.get('main_files', []))}
-python app.py  # or appropriate entry point
+python {code_analysis.get('entry_points', ['app.py'])[0]}
 ```
 
 ## 📂 Code Structure
 
-### Project Layout
-{self._prepare_detailed_file_listing(state['file_contents'], structure, code_analysis)}
-
-### Key Files
-
-{self._generate_file_by_file_documentation(state['file_contents'], structure, code_analysis)}
+```
+{state['repo_name']}/
+{self.file_helper.create_file_tree(state['file_contents'], max_depth=2)}
+```
 
 ## ⚙️ Configuration
 
-Configuration files detected:
-{chr(10).join(f'- `{f}`' for f in structure.get('config_files', []))}
+Configuration files: {', '.join(structure.get('config_files', [])[:5])}
 
 ---
 
-*Note: This is an auto-generated fallback documentation. For best results, ensure proper API configuration.*
+*Note: This is an auto-generated fallback documentation.*
 """
 
 
@@ -2069,7 +2425,7 @@ def process_repository(repo_path: str, repo_name: str = None, metadata_file="rep
 
     current_hash = calculate_repo_hash(file_contents)
 
-    # ✅ FIX: Check if documentation file exists instead of just hash
+    # Check if documentation file exists
     docs_dir = Path("repos_docs2")
     doc_file = docs_dir / f"{repo_name}_documentation.md"
     
@@ -2077,11 +2433,10 @@ def process_repository(repo_path: str, repo_name: str = None, metadata_file="rep
         print(f"⏩ Skipping {repo_name}: no changes detected and docs exist")
         return f"Skipped: no changes in {repo_name}"
     
-    # ✅ If doc file doesn't exist, always generate even if hash matches
     if not doc_file.exists():
         print(f"📝 Documentation file missing for {repo_name}, generating...")
 
-    print(f"🚀 Starting production documentation workflow...")
+    print(f"🚀 Starting enhanced documentation workflow...")
     workflow = create_documentation_workflow()
     
     state = DocumentationState(
@@ -2090,6 +2445,7 @@ def process_repository(repo_path: str, repo_name: str = None, metadata_file="rep
         file_contents=file_contents,
         file_structure={},
         code_analysis={},
+        project_type="",
         initial_documentation="",
         reviewed_documentation="",
         final_documentation="",
@@ -2105,15 +2461,17 @@ def process_repository(repo_path: str, repo_name: str = None, metadata_file="rep
             "last_updated": datetime.now().isoformat(),
             "files_analyzed": len(file_contents),
             "functions_found": len(final_state.get('code_analysis', {}).get('all_functions', [])),
-            "classes_found": len(final_state.get('code_analysis', {}).get('all_classes', []))
+            "classes_found": len(final_state.get('code_analysis', {}).get('all_classes', [])),
+            "project_type": final_state.get('project_type', 'Unknown')
         }
         with open(metadata_file, "w", encoding="utf-8") as f:
             json.dump(metadata, f, indent=2)
         
         print(f"\n{'='*70}")
         print(f"✅ SUCCESS: Production documentation generated for {repo_name}")
+        print(f"🎯 Project Type: {final_state.get('project_type', 'Unknown')}")
         print(f"{'='*70}\n")
-        return f"Success: production docs for {repo_name}"
+        return f"Success: {final_state.get('project_type', 'Unknown')} docs for {repo_name}"
     else:
         error_msg = final_state.get('error_message', 'unknown error')
         print(f"\n{'='*70}")
@@ -2122,14 +2480,16 @@ def process_repository(repo_path: str, repo_name: str = None, metadata_file="rep
         print(f"{'='*70}\n")
         return f"Failed: {error_msg}"
 
+
 # ============================================================================
 # BATCH PROCESSING
 # ============================================================================
 
 def process_all_repositories(base_path="data/github_repos"):
-    """Process all repositories with production documentation"""
+    """Process all repositories with enhanced documentation"""
     print("\n" + "="*70)
-    print("🚀 PRODUCTION-LEVEL DOCUMENTATION GENERATOR v2.0")
+    print("🚀 ENHANCED DOCUMENTATION GENERATOR v3.0")
+    print("✨ With Improved Prompts & Project-Type Detection")
     print("="*70 + "\n")
     
     base = Path(base_path)
@@ -2168,20 +2528,57 @@ def process_all_repositories(base_path="data/github_repos"):
     print("\n" + "="*70)
     print("📊 DOCUMENTATION GENERATION SUMMARY")
     print("="*70)
-    print(f"⏱️  Total time: {elapsed:.2f} seconds\n")
+    print(f"⏱️  Total time: {elapsed:.2f} seconds ({elapsed/60:.1f} minutes)\n")
     
     success_count = sum(1 for _, r in results if "Success" in r)
     skip_count = sum(1 for _, r in results if "Skipped" in r)
     fail_count = sum(1 for _, r in results if "Failed" in r)
     
+    # Group by project type
+    project_types = {}
+    for repo_name, result in results:
+        if "Success" in result:
+            ptype = result.split("docs for")[0].replace("Success: ", "").strip()
+            project_types[ptype] = project_types.get(ptype, 0) + 1
+    
+    print("📈 Results by Status:")
     for repo_name, result in results:
         status = "✅" if "Success" in result else ("⏩" if "Skipped" in result else "❌")
         print(f"{status} {repo_name}: {result}")
     
-    print(f"\n📈 Results: {success_count} successful, {skip_count} skipped, {fail_count} failed")
+    if project_types:
+        print(f"\n📊 Project Types Detected:")
+        for ptype, count in sorted(project_types.items(), key=lambda x: x[1], reverse=True):
+            print(f"   • {ptype}: {count} project(s)")
+    
+    print(f"\n📈 Summary: {success_count} successful, {skip_count} skipped, {fail_count} failed")
     print("="*70 + "\n")
 
 
+# ============================================================================
+# SINGLE REPOSITORY PROCESSING (for testing)
+# ============================================================================
+
+def process_single_repo(repo_path: str):
+    """Process a single repository - useful for testing"""
+    return process_repository(repo_path)
+
+
 if __name__ == "__main__":
-    print("Enhanced Documentation Generator v2.0")
-    print("Import and use: from utils.doc_utils import process_all_repositories")
+    print("=" * 70)
+    print("📚 Enhanced Documentation Generator v3.0")
+    print("=" * 70)
+    print("\n🎯 Features:")
+    print("   ✅ Intelligent project type detection")
+    print("   ✅ Project-specific documentation templates")
+    print("   ✅ Real code extraction and examples")
+    print("   ✅ Enhanced prompts for better accuracy")
+    print("   ✅ ML, API, CLI, Data Analysis support")
+    print("\n📖 Usage:")
+    print("   from utils.doc_utils import process_all_repositories")
+    print("   process_all_repositories('data/github_repos')")
+    print("\n   OR for single repo:")
+    print("   from utils.doc_utils import process_single_repo")
+    print("   process_single_repo('path/to/repo')")
+    print("=" * 70)
+
