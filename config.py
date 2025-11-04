@@ -112,7 +112,7 @@ QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 COLLECTION_NAME = os.getenv("COLLECTION_NAME", "githup_repos")
 
 # Model Configuration
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+# GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 HF_EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 
 # Create directories

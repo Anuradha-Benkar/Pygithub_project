@@ -1586,11 +1586,13 @@ import os
 import json
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime
-from langchain_groq import ChatGroq
+# from langchain_groq import ChatGroq
+from langchain_ollama import ChatOllama
+from langchain.schema import HumanMessage, SystemMessage
 from langchain.chains import RetrievalQA
 from langchain.prompts import PromptTemplate
 from qdrant_client.models import Filter, FieldCondition, MatchValue
-from config import GROQ_API_KEY, OUTPUT_LOG_DIR
+from config import  OUTPUT_LOG_DIR  #GROQ_API_KEY,
 
 
 # ============================================================================
@@ -1794,6 +1796,81 @@ def _retrieve_documents(vectorstore, repo_name: str, query: str) -> List:
     return docs
 
 
+# def _generate_answer(vectorstore, repo_name: str, query: str, docs: List) -> str:
+#     """
+#     Generate answer using LLM with retrieved documents.
+    
+#     Args:
+#         vectorstore: Initialized vector store
+#         repo_name: Repository name
+#         query: User's question
+#         docs: Retrieved documents
+        
+#     Returns:
+#         Generated answer string
+#     """
+#     print(f"🤖 Generating answer with LLM...")
+    
+#     # Initialize LLM
+#     # llm = ChatGroq(
+#     #     model="llama-3.3-70b-versatile",
+#     #     api_key=GROQ_API_KEY,
+#     #     temperature=0.3
+#     # )
+    
+#     # ✅ Initialize Ollama model
+#     model_name = "gpt-oss:20b"  # or any model you've pulled, e.g., 'mistral', 'llama2', etc.
+#     temperature = 0.3
+#     llm = ChatOllama(model=model_name, temperature=temperature)
+
+#     # Create prompt
+#     PROMPT = PromptTemplate(
+#         template=QA_PROMPT_TEMPLATE,
+#         input_variables=["context", "question"]
+#     )
+    
+#     # Create retriever with repo filter
+#     search_kwargs = {
+#         "k": 5,
+#         "filter": Filter(
+#             must=[
+#                 FieldCondition(
+#                     key="metadata.repo_name",
+#                     match=MatchValue(value=repo_name)
+#                 )
+#             ]
+#         )
+#     }
+#     retriever = vectorstore.as_retriever(search_kwargs=search_kwargs)
+    
+#     # # Create QA chain
+#     # qa_chain = RetrievalQA.from_chain_type(
+#     #     llm=llm,
+#     #     chain_type="stuff",
+#     #     retriever=retriever,
+#     #     chain_type_kwargs={"prompt": PROMPT},
+#     #     return_source_documents=True
+#     # )
+    
+#     # # Generate answer
+#     # result = qa_chain.invoke({"query": query})
+#     # print(f"✅ Answer generated successfully")
+    
+#     # return result["result"]
+
+#     # Combine retrieved docs into context
+#     context = "\n\n".join([doc.page_content for doc in docs[:5]])
+
+#     # Create final formatted prompt
+#     prompt = QA_PROMPT_TEMPLATE.format(context=context, question=query)
+
+#     # Run Ollama model
+#     response = llm.invoke([HumanMessage(content=prompt)])
+
+#     print("✅ Answer generated successfully using Ollama")
+
+#     return response.content.strip()
+
 def _generate_answer(vectorstore, repo_name: str, query: str, docs: List) -> str:
     """
     Generate answer using LLM with retrieved documents.
@@ -1809,47 +1886,59 @@ def _generate_answer(vectorstore, repo_name: str, query: str, docs: List) -> str
     """
     print(f"🤖 Generating answer with LLM...")
     
-    # Initialize LLM
-    llm = ChatGroq(
-        model="llama-3.3-70b-versatile",
-        api_key=GROQ_API_KEY,
-        temperature=0.3
+    # ✅ Initialize Ollama model
+    model_name = "gpt-oss:20b"
+    temperature = 0.3
+    llm = ChatOllama(model=model_name, temperature=temperature)
+
+    # Enhanced prompt template with better structure
+    ENHANCED_QA_PROMPT = """You are an expert code assistant analyzing the {repo_name} repository. Your task is to provide accurate, helpful answers based on the codebase context provided.
+
+**Context from Repository:**
+{context}
+
+**User Question:**
+{question}
+
+**Instructions:**
+- Answer based ONLY on the provided context from the codebase
+- If the context doesn't contain enough information, clearly state what's missing
+- Include relevant code snippets, file names, or function names when applicable
+- Structure your answer clearly with explanations
+- If you reference specific parts of the code, mention the file or location
+- Be concise but thorough
+- If the question cannot be answered from the context, say so honestly
+
+**Answer:**"""
+
+    # Combine retrieved docs into context with metadata
+    context_parts = []
+    for i, doc in enumerate(docs[:5], 1):
+        file_path = doc.metadata.get('file_path', 'Unknown file')
+        content = doc.page_content
+        context_parts.append(f"[Source {i}: {file_path}]\n{content}")
+    
+    context = "\n\n---\n\n".join(context_parts)
+
+    # Create final formatted prompt
+    prompt = ENHANCED_QA_PROMPT.format(
+        repo_name=repo_name,
+        context=context,
+        question=query
     )
+
+    # Run Ollama model with system message for better context
+    messages = [
+        SystemMessage(content=f"You are a helpful code assistant specializing in analyzing the {repo_name} repository."),
+        HumanMessage(content=prompt)
+    ]
     
-    # Create prompt
-    PROMPT = PromptTemplate(
-        template=QA_PROMPT_TEMPLATE,
-        input_variables=["context", "question"]
-    )
-    
-    # Create retriever with repo filter
-    search_kwargs = {
-        "k": 5,
-        "filter": Filter(
-            must=[
-                FieldCondition(
-                    key="metadata.repo_name",
-                    match=MatchValue(value=repo_name)
-                )
-            ]
-        )
-    }
-    retriever = vectorstore.as_retriever(search_kwargs=search_kwargs)
-    
-    # Create QA chain
-    qa_chain = RetrievalQA.from_chain_type(
-        llm=llm,
-        chain_type="stuff",
-        retriever=retriever,
-        chain_type_kwargs={"prompt": PROMPT},
-        return_source_documents=True
-    )
-    
-    # Generate answer
-    result = qa_chain.invoke({"query": query})
-    print(f"✅ Answer generated successfully")
-    
-    return result["result"]
+    response = llm.invoke(messages)
+
+    print("✅ Answer generated successfully using Ollama")
+
+    return response.content.strip()
+
 
 
 def _format_response(repo_name: str, answer: str, docs: List, log_file: str) -> List[str]:

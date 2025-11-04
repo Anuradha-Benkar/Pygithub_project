@@ -687,7 +687,7 @@ import sys
 import os
 sys.path.append('.')
 
-from config import GROQ_API_KEY
+# from config import GROQ_API_KEY
 from IPython.core.interactiveshell import InteractiveShell
 InteractiveShell.ast_node_interactivity = "all"
 
@@ -703,11 +703,12 @@ from collections import defaultdict
 
 # LangGraph and LangChain imports
 from langgraph.graph import StateGraph, END
-from langchain_groq import ChatGroq
+# from langchain_groq import ChatGroq
+from langchain_community.chat_models import ChatOllama
 from langchain.schema import HumanMessage
 
-if not GROQ_API_KEY:
-    raise ValueError("❌ Missing GROQ_API_KEY in .env file")
+# if not GROQ_API_KEY:
+#     raise ValueError("❌ Missing GROQ_API_KEY in .env file")
 
 
 # ============================================================================
@@ -772,7 +773,7 @@ class CodeAnalyzer:
                         'line_number': node.lineno,
                         'is_async': isinstance(node, ast.AsyncFunctionDef),
                         'decorators': decorators,
-                        'returns': self._get_return_type(node)
+                        'returns': CodeAnalyzer._get_return_type(node)
                     }
                     analysis['functions'].append(func_info)
                     analysis['complexity_score'] += len(node.body)
@@ -1106,28 +1107,49 @@ class FileStructureHelper:
 # ============================================================================
 # ENHANCED DOCUMENTATION GENERATOR
 # ============================================================================
+# class DocumentationGenerator:
+#     def __init__(self, groq_api_key: str):
+#         """Initialize with enhanced LLM models"""
+#         self.analyzer_llm = ChatGroq(
+#             model="llama-3.3-70b-versatile", 
+#             api_key=groq_api_key,
+#             temperature=0.2
+#         )
+#         self.documenter_llm = ChatGroq(
+#             model="llama-3.3-70b-versatile",
+#             api_key=groq_api_key,
+#             temperature=0.3
+#         )
+#         self.reviewer_llm = ChatGroq(
+#             model="llama-3.3-70b-versatile",
+#             api_key=groq_api_key,
+#             temperature=0.2
+#         )
+#         self.code_analyzer = CodeAnalyzer()
+#         self.project_detector = ProjectTypeDetector()
+#         self.code_extractor = CodeExtractor()
+#         self.file_helper = FileStructureHelper()
+
 class DocumentationGenerator:
-    def __init__(self, groq_api_key: str):
-        """Initialize with enhanced LLM models"""
-        self.analyzer_llm = ChatGroq(
-            model="llama-3.3-70b-versatile", 
-            api_key=groq_api_key,
-            temperature=0.2
-        )
-        self.documenter_llm = ChatGroq(
-            model="llama-3.3-70b-versatile",
-            api_key=groq_api_key,
-            temperature=0.3
-        )
-        self.reviewer_llm = ChatGroq(
-            model="llama-3.3-70b-versatile",
-            api_key=groq_api_key,
-            temperature=0.2
-        )
+    def __init__(self):
+        """Initialize with local Ollama LLM models"""
+        model_name = "gpt-oss:20b"  # or "mistral", "llama2", etc.
+        self.analyzer_llm = ChatOllama(model=model_name, temperature=0.2)
+        self.documenter_llm = ChatOllama(model=model_name, temperature=0.3)
+        self.reviewer_llm = ChatOllama(model=model_name, temperature=0.2)
+
+        # Other helper classes
         self.code_analyzer = CodeAnalyzer()
         self.project_detector = ProjectTypeDetector()
         self.code_extractor = CodeExtractor()
         self.file_helper = FileStructureHelper()
+
+    def generate_summary(self, prompt: str) -> str:
+        """Generate summary or documentation text using Ollama"""
+        response = self.documenter_llm.invoke([HumanMessage(content=prompt)])
+        text = response.content.strip()
+        return text
+
 
     # ========================================================================
     # FILE READING & STRUCTURE ANALYSIS
@@ -1354,209 +1376,218 @@ class DocumentationGenerator:
         # Project-specific questions
         specific_questions = self._get_project_specific_questions(project_type)
         
+        # FIXED: Create libraries list outside f-string
+        libraries_list = '\n'.join(f"- {lib}" for lib in main_libraries[:15])
+        
         prompt = f"""You are analyzing a **{project_type}** project: **{state['repo_name']}**
 
-        🔍 PROJECT DETECTION: {project_type}
+🔍 PROJECT DETECTION: {project_type}
 
-        📊 REPOSITORY STATISTICS:
-        - Total Files: {structure['total_files']}
-        - Primary Language: {primary_lang}
-        - Python Files: {len(code_analysis.get('python_files', {}))}
-        - JavaScript/TS Files: {len(code_analysis.get('javascript_files', {}))}
-        - Entry Points: {', '.join(code_analysis.get('entry_points', ['Not detected'])[:3])}
-        - Functions: {len(code_analysis.get('all_functions', []))}
-        - Classes: {len(code_analysis.get('all_classes', []))}
-        - API Endpoints: {len(code_analysis.get('api_endpoints', []))}
-        - Database Models: {len(code_analysis.get('database_models', []))}
+📊 REPOSITORY STATISTICS:
+- Total Files: {structure['total_files']}
+- Primary Language: {primary_lang}
+- Python Files: {len(code_analysis.get('python_files', {}))}
+- JavaScript/TS Files: {len(code_analysis.get('javascript_files', {}))}
+- Entry Points: {', '.join(code_analysis.get('entry_points', ['Not detected'])[:3])}
+- Functions: {len(code_analysis.get('all_functions', []))}
+- Classes: {len(code_analysis.get('all_classes', []))}
+- API Endpoints: {len(code_analysis.get('api_endpoints', []))}
+- Database Models: {len(code_analysis.get('database_models', []))}
 
-        🔬 KEY LIBRARIES/FRAMEWORKS DETECTED:
-        {chr(10).join(f"- {lib}" for lib in main_libraries[:15])}
+🔬 KEY LIBRARIES/FRAMEWORKS DETECTED:
+{libraries_list}
 
-        📂 PROJECT STRUCTURE:
-        ```
-        {file_tree[:2000]}
-        ```
+📂 PROJECT STRUCTURE:
+```
+{file_tree[:2000]}
+```
 
-        💻 ACTUAL CODE COMPONENTS:
+💻 ACTUAL CODE COMPONENTS:
 
-        {key_functions[:4000]}
+{key_functions[:4000]}
 
-        {key_classes[:3000]}
+{key_classes[:3000]}
 
-        **API Endpoints Detected:**
-        {chr(10).join(f"- {route}" for route in code_analysis.get('api_endpoints', [])[:15])}
+**API Endpoints Detected:**
+{self._format_list(code_analysis.get('api_endpoints', [])[:15])}
 
-        **Database Models:**
-        {', '.join(code_analysis.get('database_models', [])[:10])}
+**Database Models:**
+{', '.join(code_analysis.get('database_models', [])[:10])}
 
-        **Decorators Used:**
-        {', '.join(sorted(code_analysis.get('decorators_used', []))[:10])}
+**Decorators Used:**
+{', '.join(sorted(code_analysis.get('decorators_used', []))[:10])}
 
-        🎯 ANALYSIS REQUIREMENTS:
+🎯 ANALYSIS REQUIREMENTS:
 
-        You MUST provide a DETAILED, SPECIFIC analysis based on the ACTUAL code shown above.
+You MUST provide a DETAILED, SPECIFIC analysis based on the ACTUAL code shown above.
 
-        ## 1. Project Overview (Be SPECIFIC)
-        - **Exact Purpose**: What SPECIFIC problem does this solve? (Look at function names, classes, API endpoints)
-        - **Project Type Confirmation**: Is this truly a {project_type}? Verify from code.
-        - **Target Users**: WHO uses this? (End users, developers, data scientists, etc.)
-        - **Key Value**: What makes this useful? What's the main benefit?
-        - **Input/Output**: What goes IN and what comes OUT?
+## 1. Project Overview (Be SPECIFIC)
+- **Exact Purpose**: What SPECIFIC problem does this solve? (Look at function names, classes, API endpoints)
+- **Project Type Confirmation**: Is this truly a {project_type}? Verify from code.
+- **Target Users**: WHO uses this? (End users, developers, data scientists, etc.)
+- **Key Value**: What makes this useful? What's the main benefit?
+- **Input/Output**: What goes IN and what comes OUT?
 
-        ## 2. Technology Stack (FROM ACTUAL IMPORTS)
-        - **Primary Language**: {primary_lang}
-        - **Frameworks**: Identify ALL frameworks (Flask={('@app.route' in str(code_analysis))}, FastAPI, React, etc.)
-        - **Key Libraries & Their PURPOSE**:
-        - For EACH library in imports, explain WHY it's used in THIS project
-        - Example: "pandas - used in load_data() function for CSV processing"
-        - **Database Technology**: {('SQLAlchemy' if 'sqlalchemy' in str(main_libraries) else 'None detected')}
-        - **External Services/APIs**: Any third-party integrations?
+## 2. Technology Stack (FROM ACTUAL IMPORTS)
+- **Primary Language**: {primary_lang}
+- **Frameworks**: Identify ALL frameworks (Flask={('@app.route' in str(code_analysis))}, FastAPI, React, etc.)
+- **Key Libraries & Their PURPOSE**:
+- For EACH library in imports, explain WHY it's used in THIS project
+- Example: "pandas - used in load_data() function for CSV processing"
+- **Database Technology**: {('SQLAlchemy' if 'sqlalchemy' in str(main_libraries) else 'None detected')}
+- **External Services/APIs**: Any third-party integrations?
 
-        ## 3. Architecture & Design
-        - **Architecture Pattern**: {self._suggest_architecture(project_type)}
-        - **Entry Point**: How does the app start? (Check: {', '.join(code_analysis.get('entry_points', [])[:2])})
-        - **Data Flow**: Trace how data moves through the system
-        - **Component Breakdown**: Identify major components from files and classes
-        - **Design Patterns**: Observer, Factory, Singleton, etc. (if applicable)
+## 3. Architecture & Design
+- **Architecture Pattern**: {self._suggest_architecture(project_type)}
+- **Entry Point**: How does the app start? (Check: {', '.join(code_analysis.get('entry_points', [])[:2])})
+- **Data Flow**: Trace how data moves through the system
+- **Component Breakdown**: Identify major components from files and classes
+- **Design Patterns**: Observer, Factory, Singleton, etc. (if applicable)
 
-        ## 4. Core Functionality Analysis
-        {specific_questions}
+## 4. Core Functionality Analysis
+{specific_questions}
 
-        ## 5. Code Organization
-        - **Module Structure**: How is code organized? (by feature, by layer, etc.)
-        - **Key Files & Their Roles**:
-        - Entry Points: {', '.join(structure.get('main_files', [])[:3])}
-        - Core Logic: {', '.join(structure.get('backend_files', [])[:5])}
-        - Configuration: {', '.join(structure.get('config_files', [])[:3])}
-        - **File Relationships**: Which files depend on which?
+## 5. Code Organization
+- **Module Structure**: How is code organized? (by feature, by layer, etc.)
+- **Key Files & Their Roles**:
+- Entry Points: {', '.join(structure.get('main_files', [])[:3])}
+- Core Logic: {', '.join(structure.get('backend_files', [])[:5])}
+- Configuration: {', '.join(structure.get('config_files', [])[:3])}
+- **File Relationships**: Which files depend on which?
 
-        ## 6. Feature Inventory (FROM ACTUAL CODE)
-        List EVERY feature you can identify:
-        - Feature 1: [What it does] → Implemented in `file.py::function_name()`
-        - Feature 2: [What it does] → Implemented in `file.py::class_name`
-        (Continue for ALL major features found in code)
+## 6. Feature Inventory (FROM ACTUAL CODE)
+List EVERY feature you can identify:
+- Feature 1: [What it does] → Implemented in `file.py::function_name()`
+- Feature 2: [What it does] → Implemented in `file.py::class_name`
+(Continue for ALL major features found in code)
 
-        ## 7. Configuration & Dependencies
-        - **Environment Variables**: What's needed? (Check for os.getenv, config files)
-        - **Required Files**: Data files, config files, credentials
-        - **External Dependencies**: Services that must be running
-        - **Installation Requirements**: What needs to be installed?
+## 7. Configuration & Dependencies
+- **Environment Variables**: What's needed? (Check for os.getenv, config files)
+- **Required Files**: Data files, config files, credentials
+- **External Dependencies**: Services that must be running
+- **Installation Requirements**: What needs to be installed?
 
-        ## 8. Technical Insights
-        - **Complexity Level**: Beginner/Intermediate/Advanced
-        - **Code Quality Indicators**: Error handling, logging, type hints, docstrings
-        - **Performance Considerations**: Caching, optimization, async operations
-        - **Security Measures**: Authentication, validation, encryption
-        - **Scalability**: Can it handle growth? Bottlenecks?
-        - **Testing**: Test coverage, testing frameworks used
+## 8. Technical Insights
+- **Complexity Level**: Beginner/Intermediate/Advanced
+- **Code Quality Indicators**: Error handling, logging, type hints, docstrings
+- **Performance Considerations**: Caching, optimization, async operations
+- **Security Measures**: Authentication, validation, encryption
+- **Scalability**: Can it handle growth? Bottlenecks?
+- **Testing**: Test coverage, testing frameworks used
 
-        ## 9. Data Models (If Applicable)
-        - **Models Found**: {', '.join(code_analysis.get('database_models', [])[:10])}
-        - **Relationships**: How models relate to each other
-        - **Data Validation**: How is data validated?
+## 9. Data Models (If Applicable)
+- **Models Found**: {', '.join(code_analysis.get('database_models', [])[:10])}
+- **Relationships**: How models relate to each other
+- **Data Validation**: How is data validated?
 
-        ## 10. API Documentation (If Applicable)
-        - **Endpoints**: {len(code_analysis.get('api_endpoints', []))} detected
-        - **Request/Response Formats**: JSON, XML, etc.
-        - **Authentication**: How are requests authenticated?
+## 10. API Documentation (If Applicable)
+- **Endpoints**: {len(code_analysis.get('api_endpoints', []))} detected
+- **Request/Response Formats**: JSON, XML, etc.
+- **Authentication**: How are requests authenticated?
 
-        ---
+---
 
-        🚨 CRITICAL REQUIREMENTS:
+🚨 CRITICAL REQUIREMENTS:
 
-        1. **Use ACTUAL code evidence** - Reference specific functions, classes, files
-        2. **Be PRECISE** - "The RandomForestClassifier in model.py line 45" NOT "uses ML"
-        3. **Explain HOW** - Don't just say "processes data", explain the process
-        4. **Real examples** - Use actual function names, not placeholders
-        5. **Verify claims** - Only state what you can prove from the code
-        6. **Technical depth** - Go deep into implementation details
+1. **Use ACTUAL code evidence** - Reference specific functions, classes, files
+2. **Be PRECISE** - "The RandomForestClassifier in model.py line 45" NOT "uses ML"
+3. **Explain HOW** - Don't just say "processes data", explain the process
+4. **Real examples** - Use actual function names, not placeholders
+5. **Verify claims** - Only state what you can prove from the code
+6. **Technical depth** - Go deep into implementation details
 
-        Example of GOOD analysis:
-        ✅ "The application uses Flask (app.py:15) with 5 REST endpoints (/api/predict, /api/train, /api/status, /api/health, /api/metrics). The predict() function (model.py:78) loads a pre-trained RandomForestClassifier and makes predictions on 7 features extracted from user input via extract_features() (utils.py:34)."
+Example of GOOD analysis:
+✅ "The application uses Flask (app.py:15) with 5 REST endpoints (/api/predict, /api/train, /api/status, /api/health, /api/metrics). The predict() function (model.py:78) loads a pre-trained RandomForestClassifier and makes predictions on 7 features extracted from user input via extract_features() (utils.py:34)."
 
-        Example of BAD analysis:
-        ❌ "The application is a machine learning system that makes predictions."
+Example of BAD analysis:
+❌ "The application is a machine learning system that makes predictions."
 
-        Analyze NOW based on ACTUAL code."""
+Analyze NOW based on ACTUAL code."""
 
         return prompt
+    
+    def _format_list(self, items):
+        """Helper method to format lists safely"""
+        if not items:
+            return "None detected"
+        return '\n'.join(f"- {item}" for item in items)
 
     def _get_project_specific_questions(self, project_type: str) -> str:
         """Return project-type-specific analysis questions"""
         
         questions = {
             "Machine Learning / Data Science": """
-        **ML-Specific Analysis:**
-        - What is being PREDICTED/CLASSIFIED? (Target variable)
-        - What FEATURES are used? (List actual feature names from code)
-        - What ML ALGORITHM? (RandomForest, LogisticRegression, etc. - cite line number)
-        - DATA PREPROCESSING: How is data cleaned/transformed? (Show actual functions)
-        - TRAINING PROCESS: How is model trained? (Show train code)
-        - EVALUATION METRICS: Accuracy, precision, recall, RMSE? (What's actually measured?)
-        - MODEL PERSISTENCE: How is model saved/loaded?
-        - PREDICTION INTERFACE: How do you input data and get predictions?
-        """,
-                    "Deep Learning / Neural Networks": """
-        **Deep Learning Analysis:**
-        - NETWORK ARCHITECTURE: Layers, neurons, activation functions
-        - FRAMEWORK: TensorFlow, PyTorch, Keras?
-        - TRAINING: Loss function, optimizer, epochs, batch size
-        - DATA PIPELINE: How is training data loaded and preprocessed?
-        - MODEL: Show actual model definition code
-        - INFERENCE: How are predictions made?
-        """,
-                    "Flask Web Application (Backend API)": """
-        **Flask API Analysis:**
-        - ALL ENDPOINTS: List every @app.route with method (GET/POST/etc.)
-        - What does EACH endpoint do? Be specific.
-        - DATABASE: What database? Show model classes.
-        - AUTHENTICATION: How are requests authenticated?
-        - REQUEST/RESPONSE: What's the expected input/output format for each endpoint?
-        - ERROR HANDLING: How are errors handled?
-        - MIDDLEWARE: Any middleware used?
-        """,
-                    "FastAPI Web Application (Backend API)": """
-        **FastAPI Analysis:**
-        - ALL ENDPOINTS: List every @app.get, @app.post, etc.
-        - REQUEST MODELS: What Pydantic models are used?
-        - RESPONSE MODELS: What's returned?
-        - ASYNC: Which endpoints are async?
-        - VALIDATION: How is input validated?
-        - DOCUMENTATION: Is OpenAPI/Swagger auto-generated?
-        """,
-                    "Data Analysis / Visualization": """
-        **Data Analysis:**
-        - DATA SOURCES: What files/databases are analyzed?
-        - VISUALIZATIONS: What charts/plots are created? (bar, line, scatter, etc.)
-        - ANALYSIS STEPS: What transformations/calculations?
-        - INSIGHTS: What questions does this answer?
-        - OUTPUT: What's the final deliverable?
-        """,
-                    "Command-Line Tool (CLI)": """
-        **CLI Tool Analysis:**
-        - COMMANDS: What commands are available?
-        - ARGUMENTS: What arguments/flags does it accept?
-        - USAGE EXAMPLES: Show actual command examples
-        - INPUT: What does it operate on?
-        - OUTPUT: What does it produce?
-        """,
-                    "Web Scraping / Automation": """
-        **Scraping Analysis:**
-        - TARGET SITES: What websites are scraped?
-        - DATA EXTRACTED: What specific data is collected?
-        - SCRAPING METHOD: BeautifulSoup, Selenium, API?
-        - STORAGE: Where is data saved?
-        - RATE LIMITING: Any delays/throttling?
-        """
+**ML-Specific Analysis:**
+- What is being PREDICTED/CLASSIFIED? (Target variable)
+- What FEATURES are used? (List actual feature names from code)
+- What ML ALGORITHM? (RandomForest, LogisticRegression, etc. - cite line number)
+- DATA PREPROCESSING: How is data cleaned/transformed? (Show actual functions)
+- TRAINING PROCESS: How is model trained? (Show train code)
+- EVALUATION METRICS: Accuracy, precision, recall, RMSE? (What's actually measured?)
+- MODEL PERSISTENCE: How is model saved/loaded?
+- PREDICTION INTERFACE: How do you input data and get predictions?
+""",
+            "Deep Learning / Neural Networks": """
+**Deep Learning Analysis:**
+- NETWORK ARCHITECTURE: Layers, neurons, activation functions
+- FRAMEWORK: TensorFlow, PyTorch, Keras?
+- TRAINING: Loss function, optimizer, epochs, batch size
+- DATA PIPELINE: How is training data loaded and preprocessed?
+- MODEL: Show actual model definition code
+- INFERENCE: How are predictions made?
+""",
+            "Flask Web Application (Backend API)": """
+**Flask API Analysis:**
+- ALL ENDPOINTS: List every @app.route with method (GET/POST/etc.)
+- What does EACH endpoint do? Be specific.
+- DATABASE: What database? Show model classes.
+- AUTHENTICATION: How are requests authenticated?
+- REQUEST/RESPONSE: What's the expected input/output format for each endpoint?
+- ERROR HANDLING: How are errors handled?
+- MIDDLEWARE: Any middleware used?
+""",
+            "FastAPI Web Application (Backend API)": """
+**FastAPI Analysis:**
+- ALL ENDPOINTS: List every @app.get, @app.post, etc.
+- REQUEST MODELS: What Pydantic models are used?
+- RESPONSE MODELS: What's returned?
+- ASYNC: Which endpoints are async?
+- VALIDATION: How is input validated?
+- DOCUMENTATION: Is OpenAPI/Swagger auto-generated?
+""",
+            "Data Analysis / Visualization": """
+**Data Analysis:**
+- DATA SOURCES: What files/databases are analyzed?
+- VISUALIZATIONS: What charts/plots are created? (bar, line, scatter, etc.)
+- ANALYSIS STEPS: What transformations/calculations?
+- INSIGHTS: What questions does this answer?
+- OUTPUT: What's the final deliverable?
+""",
+            "Command-Line Tool (CLI)": """
+**CLI Tool Analysis:**
+- COMMANDS: What commands are available?
+- ARGUMENTS: What arguments/flags does it accept?
+- USAGE EXAMPLES: Show actual command examples
+- INPUT: What does it operate on?
+- OUTPUT: What does it produce?
+""",
+            "Web Scraping / Automation": """
+**Scraping Analysis:**
+- TARGET SITES: What websites are scraped?
+- DATA EXTRACTED: What specific data is collected?
+- SCRAPING METHOD: BeautifulSoup, Selenium, API?
+- STORAGE: Where is data saved?
+- RATE LIMITING: Any delays/throttling?
+"""
         }
         
         return questions.get(project_type, """
-        **General Analysis:**
-        - MAIN FUNCTIONALITY: What does this application do?
-        - KEY OPERATIONS: What are the main operations/processes?
-        - USER INTERACTION: How do users interact with it?
-        - DATA HANDLING: How is data processed?
-        """)
+**General Analysis:**
+- MAIN FUNCTIONALITY: What does this application do?
+- KEY OPERATIONS: What are the main operations/processes?
+- USER INTERACTION: How do users interact with it?
+- DATA HANDLING: How is data processed?
+""")
 
     def _suggest_architecture(self, project_type: str) -> str:
         """Suggest likely architecture based on project type"""
@@ -1616,48 +1647,53 @@ class DocumentationGenerator:
         
         prompt = f"""Generate PRODUCTION-QUALITY, PROJECT-SPECIFIC documentation for: **{state['repo_name']}**
 
-        📋 PROJECT TYPE: {project_type}
+📋 PROJECT TYPE: {project_type}
 
-        🔬 TECHNICAL ANALYSIS COMPLETED:
-        {state['initial_documentation'][:15000]}
+🔬 TECHNICAL ANALYSIS COMPLETED:
+{state['initial_documentation'][:15000]}
 
-        💻 MAIN FILE CODE:
-        ```python
-        {main_code}
-        ```
+💻 MAIN FILE CODE:
+```python
+{main_code}
+```
 
-        📊 CODE METRICS:
-        - Functions: {len(code_analysis.get('all_functions', []))}
-        - Classes: {len(code_analysis.get('all_classes', []))}
-        - API Endpoints: {len(code_analysis.get('api_endpoints', []))}
-        - Entry Points: {', '.join(code_analysis.get('entry_points', [])[:3])}
+📊 CODE METRICS:
+- Functions: {len(code_analysis.get('all_functions', []))}
+- Classes: {len(code_analysis.get('all_classes', []))}
+- API Endpoints: {len(code_analysis.get('api_endpoints', []))}
+- Entry Points: {', '.join(code_analysis.get('entry_points', [])[:3])}
 
-        🎯 DOCUMENTATION TEMPLATE:
+🎯 DOCUMENTATION TEMPLATE:
 
-        {template}
+{template}
 
-        ---
+---
 
-        🚨 CRITICAL REQUIREMENTS:
+🚨 CRITICAL REQUIREMENTS:
 
-        1. **REAL CODE ONLY** - Use ACTUAL function/class names, file paths, code snippets from the repository
-        2. **NO PLACEHOLDERS** - Never write "your_function()", "example.py", or "sample_data"
-        3. **WORKING EXAMPLES** - Every code example must be runnable
-        4. **SPECIFIC COMMANDS** - Show exact commands with real file names
-        5. **ACTUAL ENDPOINTS** - Use real API routes from code_analysis
-        6. **REAL CONFIGURATION** - Show actual config variables from code
-        7. **PRECISE EXPLANATIONS** - Explain HOW and WHY, not just WHAT
+1. **REAL CODE ONLY** - Use ACTUAL function/class names, file paths, code snippets from the repository
+2. **NO PLACEHOLDERS** - Never write "your_function()", "example.py", or "sample_data"
+3. **WORKING EXAMPLES** - Every code example must be runnable
+4. **SPECIFIC COMMANDS** - Show exact commands with real file names
+5. **ACTUAL ENDPOINTS** - Use real API routes from code_analysis
+6. **REAL CONFIGURATION** - Show actual config variables from code
+7. **PRECISE EXPLANATIONS** - Explain HOW and WHY, not just WHAT
+8. **ADD ARCHITECTURE DIAGRAMS** - Include Mermaid diagrams for flow and architecture
+9. **ADD CODE STRUCTURE SECTION** - Detailed explanation of project organization
 
-        VALIDATION CHECKLIST (verify before submitting):
-        ✅ Every code block contains real code from the repo
-        ✅ Every file path mentioned actually exists
-        ✅ Every function/class name is from actual code
-        ✅ All installation commands will actually work
-        ✅ All examples can be copy-pasted and run
-        ✅ Mermaid diagrams are syntactically correct
-        ✅ No generic placeholders anywhere
+VALIDATION CHECKLIST (verify before submitting):
+✅ Every code block contains real code from the repo
+✅ Every file path mentioned actually exists
+✅ Every function/class name is from actual code
+✅ All installation commands will actually work
+✅ All examples can be copy-pasted and run
+✅ Mermaid diagrams are syntactically correct
+✅ No generic placeholders anywhere
+✅ Architecture diagram included
+✅ Data flow diagram included (if applicable)
+✅ Code structure section is detailed
 
-        Generate COMPLETE, DETAILED, PRODUCTION-READY documentation NOW."""
+Generate COMPLETE, DETAILED, PRODUCTION-READY documentation NOW."""
 
         return prompt
 
@@ -1677,434 +1713,1098 @@ class DocumentationGenerator:
 
     def _ml_documentation_template(self, repo_name, code_analysis):
         """ML/DS project documentation template"""
+        # Create endpoint lists safely
+        endpoints_list = '\n'.join(f"- `{endpoint}`" for endpoint in code_analysis.get('api_endpoints', [])[:20])
+        models_list = '\n'.join(f"- {model}" for model in code_analysis.get('database_models', [])[:10])
+        
         return f"""
-            # {repo_name} - Machine Learning Documentation
+# {repo_name} - Machine Learning Documentation
 
-            ## 📋 Table of Contents
-            1. [Overview](#overview)
-            2. [Problem Statement](#problem-statement)
-            3. [Dataset](#dataset)
-            4. [Methodology](#methodology)
-            5. [Installation](#installation)
-            6. [Usage](#usage)
-            7. [Model Details](#model-details)
-            8. [Results](#results)
-            9. [Code Structure](#code-structure)
+## 📋 Table of Contents
+1. [Overview](#overview)
+2. [Problem Statement](#problem-statement)
+3. [Dataset](#dataset)
+4. [Methodology](#methodology)
+5. [Installation](#installation)
+6. [Usage](#usage)
+7. [Model Details](#model-details)
+8. [Results](#results)
+9. [Architecture](#architecture)
+10. [Code Structure](#code-structure)
+11. [Data Flow](#data-flow)
 
-            ---
+---
 
-            ## 🎯 Overview
+## 🎯 Overview
 
-            ### Project Goal
-            [What is being predicted/classified? Be SPECIFIC]
+### Project Goal
+[What is being predicted/classified? Be SPECIFIC from actual code]
 
-            ### Problem Type
-            - [ ] Classification
-            - [ ] Regression
-            - [ ] Clustering
-            - [ ] Other: ___
+### Problem Type
+- [ ] Classification
+- [ ] Regression
+- [ ] Clustering
+- [ ] Other: ___
 
-            ### Target Variable
-            **Target:** `[actual target column name]`
+### Target Variable
+**Target:** `[actual target column name from code]`
 
-            ### Performance
-            - **Accuracy/Score:** [if mentioned in code]
-            - **Evaluation Metric:** [actual metric used]
+### Performance
+- **Accuracy/Score:** [if mentioned in code]
+- **Evaluation Metric:** [actual metric used]
 
-            ---
+---
 
-            ## 📊 Dataset
+## 📊 Dataset
 
-            ### Data Source
-            [Where does the data come from? Show actual file paths or URLs]
+### Data Source
+[Where does the data come from? Show actual file paths or URLs from code]
 
-            ### Features Used
-            Show ACTUAL features from the code:
+### Features Used
+Show ACTUAL features from the code:
 
-            | Feature Name | Description | Type | Example Value |
-            |--------------|-------------|------|---------------|
-            | [real_feature_1] | [purpose] | numeric/categorical | [value] |
-            | [real_feature_2] | [purpose] | numeric/categorical | [value] |
+| Feature Name | Description | Type | Example Value |
+|--------------|-------------|------|---------------|
+| [real_feature_1] | [purpose] | numeric/categorical | [value] |
+| [real_feature_2] | [purpose] | numeric/categorical | [value] |
 
-            ### Data Loading
-            ```python
-            # ACTUAL data loading code from repository
-            [paste real code here]
-            ```
+### Data Loading
+```python
+# ACTUAL data loading code from repository
+[paste real code here from actual file]
+```
 
-            ---
+---
 
-            ## 🔬 Methodology
+## 🔬 Methodology
 
-            ### 1. Data Preprocessing
+### 1. Data Preprocessing
 
-            Show ACTUAL preprocessing steps:
+Show ACTUAL preprocessing steps from code:
 
-            ```python
-            # Real preprocessing code
-            [actual code from repo]
-            ```
+```python
+# Real preprocessing code
+[actual code from repo with real function names]
+```
 
-            **Steps:**
-            1. [Actual step 1 - cite function]
-            2. [Actual step 2 - cite function]
-            3. [Actual step 3 - cite function]
+**Steps:**
+1. [Actual step 1 - cite function and file]
+2. [Actual step 2 - cite function and file]
+3. [Actual step 3 - cite function and file]
 
-            ### 2. Feature Engineering
+### 2. Feature Engineering
 
-            ```python
-            # Actual feature engineering code
-            [real code]
-            ```
+```python
+# Actual feature engineering code
+[real code with actual function names]
+```
 
-            ### 3. Model Training
+### 3. Model Training
 
-            **Algorithm Used:** [RandomForestClassifier/LogisticRegression/etc. - from actual code]
+**Algorithm Used:** [RandomForestClassifier/LogisticRegression/etc. - from actual code with line number]
 
-            ```python
-            # ACTUAL model training code with real hyperparameters
-            [real training code]
-            ```
+```python
+# ACTUAL model training code with real hyperparameters
+[real training code from repository]
+```
 
-            **Hyperparameters:**
-            - `parameter1`: [actual value]
-            - `parameter2`: [actual value]
+**Hyperparameters:**
+- `parameter1`: [actual value from code]
+- `parameter2`: [actual value from code]
 
-            ### 4. Model Evaluation
+### 4. Model Evaluation
 
-            ```python
-            # Real evaluation code
-            [actual metrics calculation]
-            ```
+```python
+# Real evaluation code
+[actual metrics calculation from code]
+```
 
-            ---
+---
 
-            ## 🚀 Installation
+## 🏗️ Architecture
 
-            ### Prerequisites
-            ```bash
-            Python 3.x
-            [list actual requirements]
-            ```
+### System Architecture
 
-            ### Setup
-            ```bash
-            # Clone repository
-            git clone [url]
-            cd {repo_name}
+```mermaid
+graph TD
+    A[Data Input] --> B[Data Preprocessing]
+    B --> C[Feature Engineering]
+    C --> D[Model Training]
+    D --> E[Model Evaluation]
+    E --> F[Model Deployment]
+    F --> G[Prediction API]
+    
+    style A fill:#e1f5ff
+    style D fill:#fff3e0
+    style G fill:#f3e5f5
+```
 
-            # Install dependencies (use ACTUAL requirements file name)
-            pip install -r requirements.txt
-            ```
+### Component Architecture
 
-            ---
+```mermaid
+graph LR
+    subgraph Data Layer
+        D1[Raw Data]
+        D2[Processed Data]
+    end
+    
+    subgraph Model Layer
+        M1[Preprocessing Pipeline]
+        M2[ML Model]
+        M3[Prediction Engine]
+    end
+    
+    subgraph API Layer
+        A1[REST API]
+        A2[Response Handler]
+    end
+    
+    D1 --> M1
+    M1 --> D2
+    D2 --> M2
+    M2 --> M3
+    M3 --> A1
+    A1 --> A2
+```
 
-            ## 📘 Usage
+---
 
-            ### Training the Model
+## 🔄 Data Flow
 
-            ```bash
-            # Show ACTUAL command to train
-            python [actual_training_file.py]
-            ```
+### Training Flow
 
-            ### Making Predictions
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant D as Data Loader
+    participant P as Preprocessor
+    participant M as Model
+    participant E as Evaluator
+    
+    U->>D: Load training data
+    D->>P: Raw data
+    P->>P: Clean & transform
+    P->>M: Processed features
+    M->>M: Train model
+    M->>E: Trained model
+    E->>E: Calculate metrics
+    E->>U: Performance report
+```
 
-            ```python
-            # REAL prediction code with actual function/class names
-            from [actual_module] import [actual_class]
+### Prediction Flow
 
-            # Use REAL feature names
-            data = [[actual, feature, values]]
-            prediction = model.predict(data)
-            ```
+```mermaid
+sequenceDiagram
+    participant U as User/API
+    participant V as Validator
+    participant P as Preprocessor
+    participant M as Model
+    participant R as Response
+    
+    U->>V: Input data
+    V->>V: Validate format
+    V->>P: Valid data
+    P->>P: Apply transformations
+    P->>M: Processed features
+    M->>M: Make prediction
+    M->>R: Prediction result
+    R->>U: JSON response
+```
 
-            ### Example
+---
 
-            ```python
-            # Complete working example from repository
-            [full example code]
-            ```
+## 🚀 Installation
 
-            ---
+### Prerequisites
+```bash
+Python 3.x
+[list actual requirements from requirements.txt]
+```
 
-            ## 🤖 Model Details
+### Setup
+```bash
+# Clone repository
+git clone [actual url if available]
+cd {repo_name}
 
-            ### Architecture
-            [Describe actual model architecture from code]
+# Install dependencies (use ACTUAL requirements file name)
+pip install -r requirements.txt
 
-            ### Training Process
-            1. [Step 1 from actual code]
-            2. [Step 2 from actual code]
-            3. [Step 3 from actual code]
+# [Any other setup steps from actual code]
+```
 
-            ### Model Persistence
-            ```python
-            # How model is saved/loaded (actual code)
-            [real save/load code]
-            ```
+---
 
-            ---
+## 📘 Usage
 
-            ## 📈 Results
+### Training the Model
 
-            [Include any results/metrics from code or comments]
+```bash
+# Show ACTUAL command to train from code
+python [actual_training_file.py] [actual_arguments]
+```
 
-            ---
+### Making Predictions
 
-            ## 📂 Code Structure
+```python
+# REAL prediction code with actual function/class names
+from [actual_module] import [actual_class]
 
-            ```
-            {repo_name}/
-            ├── [actual_file_1.py]     # [Purpose from analysis]
-            ├── [actual_file_2.py]     # [Purpose from analysis]
-            └── [actual_file_3.py]     # [Purpose from analysis]
-            ```
+# Use REAL feature names from code
+[actual prediction code from repository]
+```
 
-            ### Key Files
+### Example
 
-            #### `[actual_main_file.py]`
-            [Explanation of what this file does]
+```python
+# Complete working example from repository
+[full example code with real function names and parameters]
+```
 
-            **Key Functions:**
-            - `actual_function_1()`: [What it does]
-            - `actual_function_2()`: [What it does]
-            """
+---
+
+## 🤖 Model Details
+
+### Architecture
+[Describe actual model architecture from code - layers, parameters, etc.]
+
+### Training Process
+1. [Step 1 from actual training code with file reference]
+2. [Step 2 from actual training code with file reference]
+3. [Step 3 from actual training code with file reference]
+
+### Model Persistence
+```python
+# How model is saved/loaded (actual code)
+[real save/load code from repository]
+```
+
+---
+
+## 📈 Results
+
+[Include any results/metrics from code, comments, or documentation]
+
+**Performance Metrics:**
+- Metric 1: [value if available]
+- Metric 2: [value if available]
+
+---
+
+## 📂 Code Structure
+
+```
+{repo_name}/
+├── [actual_file_1.py]     # [Purpose from analysis - be specific]
+│   ├── [actual_function_1]()  # [What it does]
+│   └── [actual_class_1]       # [What it does]
+├── [actual_file_2.py]     # [Purpose from analysis]
+│   ├── [actual_function_2]()  # [What it does]
+│   └── [actual_function_3]()  # [What it does]
+└── [actual_file_3.py]     # [Purpose from analysis]
+    └── [actual_class_2]       # [What it does]
+```
+
+### Key Files Explained
+
+#### `[actual_main_file.py]`
+**Purpose:** [Detailed explanation of what this file does]
+
+**Key Components:**
+- `actual_function_1()`: [What it does, parameters, returns]
+- `actual_function_2()`: [What it does, parameters, returns]
+- `ActualClass`: [What it does, key methods]
+
+**Dependencies:**
+- [List actual imported modules]
+
+#### `[actual_data_file.py]`
+**Purpose:** [Detailed explanation]
+
+**Key Components:**
+- [List actual functions/classes with purposes]
+
+---
+
+## 🔧 Configuration
+
+### Environment Variables
+```bash
+# Actual environment variables from code
+[REAL_ENV_VAR_1]=[description]
+[REAL_ENV_VAR_2]=[description]
+```
+
+### Configuration Files
+- `[actual_config_file]`: [What it configures]
+
+---
+
+## 🧪 Testing
+
+[If test files exist]
+```bash
+# Run tests (actual command)
+python -m pytest [actual_test_directory]
+```
+
+---
+
+## 📝 API Reference (If Applicable)
+
+### Endpoints
+
+{endpoints_list}
+
+---
+
+## 🤝 Contributing
+
+[Standard contributing guidelines]
+
+---
+
+## 📄 License
+
+[License information if available in repo]
+
+---
+
+*Documentation generated with enhanced AI analysis including architecture diagrams and detailed code structure*
+"""
 
     def _api_documentation_template(self, repo_name, code_analysis, project_type):
-            """API documentation template"""
-            endpoints = code_analysis.get('api_endpoints', [])
-            return f"""
-            # {repo_name} - API Documentation
-
-            ## 📋 Table of Contents
-            1. [Overview](#overview)
-            2. [API Endpoints](#api-endpoints)
-            3. [Installation](#installation)
-            4. [Running the API](#running-the-api)
-            5. [Authentication](#authentication)
-            6. [Database Schema](#database-schema)
-            7. [Code Structure](#code-structure)
-
-            ---
-
-            ## 🎯 Overview
-
-            **Framework:** {project_type}
-            **Base URL:** `http://localhost:[port]`
-            **Endpoints:** {len(endpoints)} routes
-
-            ---
-
-            ## 🔌 API Endpoints
-
-            ### Complete Endpoint List
-
-            {chr(10).join(f"- `{endpoint}`" for endpoint in endpoints[:20])}
-
-            ### Detailed Documentation
-
-            {chr(10).join(f'''
-            #### `{endpoint}`
-
-            **Method:** [GET/POST/PUT/DELETE]
-            **Description:** [What this endpoint does - from code analysis]
-
-            **Request:**
-            ```bash
-            curl -X [METHOD] http://localhost:5000{endpoint} \\
-            -H "Content-Type: application/json" \\
-            -d '[actual request body format]'
-            ```
-
-            **Response:**
-            ```json
-            {{
-            "example": "from actual code"
-            }}
-            ```
-
-            **Code Implementation:**
-            ```python
-            # Actual route handler code
-            [paste real code]
-            ```
-
-            ---
-            ''' for endpoint in endpoints[:8])}
-
-            ---
-
-            ## 🚀 Installation
-
-            ```bash
-            # Clone
-            git clone [url]
-            cd {repo_name}
-
-            # Install (use ACTUAL requirements file)
-            pip install -r requirements.txt
-
-            # Setup database (if applicable)
-            [actual setup commands]
-            ```
-
-            ---
-
-            ## ▶️ Running the API
-
-            ```bash
-            # ACTUAL command to start server
-            python [actual_main_file.py]
-            ```
-
-            Server will start on: `http://localhost:[actual_port]`
-
-            ---
-
-            ## 🗄️ Database Schema
-
-            ### Models
-
-            {chr(10).join(f'''
-            #### `{model}`
-            [Description from code]
-
-            **Fields:**
-            - [actual fields from model class]
-
-            **Relationships:**
-            - [actual relationships]
-            ''' for model in code_analysis.get('database_models', [])[:5])}
-
-            ---
-
-            ## 📂 Code Structure
-
-            [Show actual project structure with real files]
-            """
-
-    def _cli_documentation_template(self, repo_name, code_analysis):
-        """CLI tool documentation template"""
+        """API documentation template"""
+        endpoints = code_analysis.get('api_endpoints', [])
+        models = code_analysis.get('database_models', [])
+        
+        # Create lists safely
+        endpoints_list = '\n'.join(f"- `{endpoint}`" for endpoint in endpoints[:20])
+        models_list = '\n'.join(f"#### `{model}`\n[Description from code]\n" for model in models[:5])
+        
         return f"""
-# {repo_name} - Command-Line Tool
+# {repo_name} - API Documentation
 
-## 📋 Overview
+## 📋 Table of Contents
+1. [Overview](#overview)
+2. [API Endpoints](#api-endpoints)
+3. [Installation](#installation)
+4. [Running the API](#running-the-api)
+5. [Authentication](#authentication)
+6. [Database Schema](#database-schema)
+7. [Architecture](#architecture)
+8. [Code Structure](#code-structure)
+9. [API Flow](#api-flow)
 
-[Description of what the CLI tool does]
+---
+
+## 🎯 Overview
+
+**Framework:** {project_type}
+**Base URL:** `http://localhost:[port from code]`
+**Endpoints:** {len(endpoints)} routes
+
+### Quick Start
+```bash
+# Start the API
+python [actual_main_file.py]
+```
+
+---
+
+## 🏗️ Architecture
+
+### System Architecture
+
+```mermaid
+graph TD
+    A[Client Request] --> B[API Gateway]
+    B --> C{{Route Handler}}
+    C --> D[Business Logic]
+    C --> E[Authentication]
+    D --> F[(Database)]
+    E --> D
+    D --> G[Response]
+    G --> A
+    
+    style A fill:#e1f5ff
+    style C fill:#fff3e0
+    style F fill:#f3e5f5
+```
+
+### API Architecture
+
+```mermaid
+graph LR
+    subgraph Client Layer
+        C1[Web Client]
+        C2[Mobile App]
+        C3[API Consumer]
+    end
+    
+    subgraph API Layer
+        A1[Routes]
+        A2[Controllers]
+        A3[Middleware]
+    end
+    
+    subgraph Business Layer
+        B1[Services]
+        B2[Validators]
+    end
+    
+    subgraph Data Layer
+        D1[(Database)]
+        D2[Models]
+    end
+    
+    C1 --> A1
+    C2 --> A1
+    C3 --> A1
+    A1 --> A3
+    A3 --> A2
+    A2 --> B1
+    B1 --> B2
+    B2 --> D2
+    D2 --> D1
+```
+
+---
+
+## 🔄 API Flow
+
+### Request Flow
+
+```mermaid
+sequenceDiagram
+    participant C as Client
+    participant M as Middleware
+    participant R as Route Handler
+    participant S as Service
+    participant D as Database
+    
+    C->>M: HTTP Request
+    M->>M: Authenticate
+    M->>R: Validated Request
+    R->>R: Parse & Validate
+    R->>S: Business Logic
+    S->>D: Query Data
+    D->>S: Return Data
+    S->>R: Processed Data
+    R->>C: JSON Response
+```
+
+---
+
+## 🔌 API Endpoints
+
+### Complete Endpoint List
+
+{endpoints_list}
+
+### Detailed Documentation
+
+[For each endpoint, provide:]
+
+#### `POST /api/example`
+
+**Description:** [What this endpoint does - from actual code]
+
+**Request:**
+```bash
+curl -X POST http://localhost:5000/api/example \\
+  -H "Content-Type: application/json" \\
+  -d '[actual request body structure from code]'
+```
+
+**Request Body:**
+```json
+{{
+  "field1": "value",
+  "field2": "value"
+}}
+```
+
+**Response:**
+```json
+{{
+  "status": "success",
+  "data": {{}}
+}}
+```
+
+**Code Implementation:**
+```python
+# Actual route handler code from repository
+[paste real code]
+```
+
+---
 
 ## 🚀 Installation
 
 ```bash
+# Clone
+git clone [url]
+cd {repo_name}
+
+# Install (use ACTUAL requirements file)
 pip install -r requirements.txt
+
+# Setup database (if applicable - actual commands from code)
+[actual setup commands]
+
+# Set environment variables
+export API_KEY=[value]
+export DATABASE_URL=[value]
 ```
+
+---
+
+## ▶️ Running the API
+
+```bash
+# ACTUAL command to start server from code
+python [actual_main_file.py]
+
+# Or if using Flask
+flask run
+
+# Or if using uvicorn (FastAPI)
+uvicorn [actual_module]:app --reload
+```
+
+Server will start on: `http://localhost:[actual_port from code]`
+
+---
+
+## 🔐 Authentication
+
+[Describe actual authentication method from code]
+
+```python
+# Actual authentication code
+[real auth code from repository]
+```
+
+---
+
+## 🗄️ Database Schema
+
+### Entity Relationship Diagram
+
+```mermaid
+erDiagram
+    USER ||--o{{ ORDER : places
+    USER {{
+        int id PK
+        string email
+        string password_hash
+        datetime created_at
+    }}
+    ORDER {{
+        int id PK
+        int user_id FK
+        decimal total
+        datetime created_at
+    }}
+    ORDER ||--|{{ ORDER_ITEM : contains
+    ORDER_ITEM {{
+        int id PK
+        int order_id FK
+        int product_id FK
+        int quantity
+    }}
+```
+
+### Models
+
+{models_list}
+
+---
+
+## 📂 Code Structure
+
+```
+{repo_name}/
+├── [actual_api_file.py]       # API routes and endpoints
+│   ├── @app.route('/endpoint1')  # [Purpose]
+│   └── @app.route('/endpoint2')  # [Purpose]
+├── [actual_models_file.py]    # Database models
+│   ├── class Model1          # [Purpose]
+│   └── class Model2          # [Purpose]
+├── [actual_services_file.py]  # Business logic
+│   ├── service_function_1()  # [Purpose]
+│   └── service_function_2()  # [Purpose]
+└── [actual_config_file.py]    # Configuration
+```
+
+### Key Components
+
+#### Routes (`[actual_routes_file.py]`)
+**Purpose:** [Detailed explanation]
+
+**Endpoints:**
+- `[actual_endpoint]`: [What it does]
+
+#### Models (`[actual_models_file.py]`)
+**Purpose:** [Detailed explanation]
+
+**Models:**
+- `[ActualModel]`: [What it represents]
+
+---
+
+## 🧪 Testing
+
+```bash
+# Run tests (actual command from code)
+pytest [actual_test_directory]
+```
+
+---
+
+## 📊 Monitoring
+
+[If logging/monitoring code exists]
+
+```python
+# Actual logging code
+[real monitoring/logging code]
+```
+
+---
+
+*API Documentation with architecture diagrams and complete code structure*
+"""
+
+    def _cli_documentation_template(self, repo_name, code_analysis):
+        """CLI tool documentation template"""
+        return f"""
+# {repo_name} - Command-Line Tool Documentation
+
+## 📋 Table of Contents
+1. [Overview](#overview)
+2. [Installation](#installation)
+3. [Usage](#usage)
+4. [Commands](#commands)
+5. [Examples](#examples)
+6. [Architecture](#architecture)
+7. [Code Structure](#code-structure)
+
+---
+
+## 🎯 Overview
+
+[Description of what the CLI tool does - from actual code analysis]
+
+**Main Features:**
+- [Feature 1 from code]
+- [Feature 2 from code]
+- [Feature 3 from code]
+
+---
+
+## 🏗️ Architecture
+
+### CLI Flow
+
+```mermaid
+graph TD
+    A[User Command] --> B[Argument Parser]
+    B --> C{{Command Router}}
+    C --> D[Command Handler 1]
+    C --> E[Command Handler 2]
+    C --> F[Command Handler 3]
+    D --> G[Execute Logic]
+    E --> G
+    F --> G
+    G --> H[Output Result]
+    
+    style A fill:#e1f5ff
+    style C fill:#fff3e0
+    style H fill:#f3e5f5
+```
+
+---
+
+## 🚀 Installation
+
+```bash
+# Clone repository
+git clone [url]
+cd {repo_name}
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Install CLI tool
+pip install -e .
+```
+
+---
 
 ## 📘 Usage
 
-### Basic Command
+### Basic Command Structure
 
 ```bash
-python [actual_main_file.py] [arguments]
+python [actual_main_file.py] [command] [options] [arguments]
 ```
 
-### Available Commands
+---
+
+## 🔧 Commands
 
 [List ACTUAL commands from argparse/click in code]
 
-### Examples
+### Command 1: `[actual_command_name]`
 
+**Description:** [What it does from code]
+
+**Usage:**
 ```bash
-# Example 1 (REAL command)
-python [actual_file] [actual_args]
-
-# Example 2 (REAL command)
-python [actual_file] [actual_args]
+python [actual_file] [actual_command] [actual_flags]
 ```
 
-## ⚙️ Options
+**Options:**
+- `--flag1`: [Description from code]
+- `--flag2`: [Description from code]
 
-[Show ACTUAL CLI options from code]
+**Examples:**
+```bash
+# Example 1 (REAL command from code)
+python [actual_file] [actual_command] --flag value
 
-| Flag | Description | Default |
-|------|-------------|---------|
-| [actual_flag] | [purpose] | [value] |
+# Example 2
+python [actual_file] [actual_command] input.txt
+```
+
+---
+
+## 📂 Code Structure
+
+```
+{repo_name}/
+├── [actual_cli_file.py]      # Main CLI entry point
+│   ├── main()                # Entry function
+│   └── [command_function]()  # Command handler
+└── [actual_utils_file.py]    # Helper functions
+```
+
+---
+
+## 🧪 Testing
+
+```bash
+# Run tests
+python -m pytest tests/
+```
+
+---
+
+*CLI Documentation with flow diagrams*
 """
 
     def _data_analysis_template(self, repo_name, code_analysis):
         """Data analysis documentation template"""
         return f"""
-# {repo_name} - Data Analysis
+# {repo_name} - Data Analysis Documentation
 
-## 📊 Analysis Overview
+## 📋 Table of Contents
+1. [Overview](#overview)
+2. [Dataset](#dataset)
+3. [Analysis Steps](#analysis-steps)
+4. [Visualizations](#visualizations)
+5. [Results](#results)
+6. [Architecture](#architecture)
+7. [Code Structure](#code-structure)
 
-[What data is being analyzed and why]
+---
 
-## 📂 Data Sources
+## 🎯 Overview
 
-[Actual data files or sources from code]
+[What data is being analyzed and why - from actual code]
+
+---
+
+## 🏗️ Architecture
+
+### Analysis Pipeline
+
+```mermaid
+graph LR
+    A[Raw Data] --> B[Data Loading]
+    B --> C[Data Cleaning]
+    C --> D[Data Transformation]
+    D --> E[Analysis]
+    E --> F[Visualization]
+    F --> G[Insights/Report]
+    
+    style A fill:#e1f5ff
+    style E fill:#fff3e0
+    style G fill:#f3e5f5
+```
+
+---
+
+## 📊 Dataset
+
+**Data Sources:**
+- [Actual data file 1 from code]
+- [Actual data file 2 from code]
+
+**Data Structure:**
+[Show actual column names and types from code]
+
+---
+
+## 🔬 Analysis Steps
+
+### 1. Data Loading
+```python
+# Actual data loading code
+[real code from repository]
+```
+
+### 2. Data Cleaning
+```python
+# Actual cleaning code
+[real code from repository]
+```
+
+### 3. Analysis
+```python
+# Actual analysis code
+[real code from repository]
+```
+
+---
 
 ## 📈 Visualizations
 
 [List actual plots/charts created in code]
 
-## 🔬 Analysis Steps
+1. **[Chart Type]**: [What it shows]
+   ```python
+   # Actual plotting code
+   [real code]
+   ```
 
-1. [Actual step 1 from code]
-2. [Actual step 2 from code]
-3. [Actual step 3 from code]
+---
 
-## 🚀 Running the Analysis
+## 📂 Code Structure
 
-```bash
-python [actual_file.py]
+```
+{repo_name}/
+├── [actual_analysis_file.py]   # Main analysis
+├── [actual_data_file.csv]      # Dataset
+└── [actual_output_dir]/         # Results
 ```
 
-## 📉 Results
+---
 
-[Show any results or insights from code]
+*Data Analysis Documentation with pipeline diagrams*
 """
 
     def _general_documentation_template(self, repo_name, code_analysis):
         """General project documentation template"""
+        funcs_list = '\n'.join(f"- `{func}()` - [Purpose]" for func in code_analysis.get('all_functions', [])[:10])
+        
         return f"""
-# {repo_name}
+# {repo_name} - Project Documentation
 
 ## 📋 Table of Contents
 1. [Overview](#overview)
 2. [Features](#features)
 3. [Installation](#installation)
 4. [Usage](#usage)
-5. [Code Structure](#code-structure)
-6. [Configuration](#configuration)
+5. [Architecture](#architecture)
+6. [Code Structure](#code-structure)
+7. [Configuration](#configuration)
 
 ---
 
 ## 🎯 Overview
 
-[Specific description from analysis]
+[Specific description from analysis - what this project does]
+
+**Key Capabilities:**
+- [Capability 1 from code]
+- [Capability 2 from code]
+- [Capability 3 from code]
+
+---
+
+## 🏗️ Architecture
+
+### System Overview
+
+```mermaid
+graph TD
+    A[Input] --> B[Processing Module]
+    B --> C[Core Logic]
+    C --> D[Output Handler]
+    D --> E[Result]
+    
+    style A fill:#e1f5ff
+    style C fill:#fff3e0
+    style E fill:#f3e5f5
+```
+
+### Component Interaction
+
+```mermaid
+graph LR
+    subgraph Input Layer
+        I1[User Input]
+        I2[File Input]
+    end
+    
+    subgraph Processing Layer
+        P1[Validator]
+        P2[Processor]
+    end
+    
+    subgraph Output Layer
+        O1[Formatter]
+        O2[Output Handler]
+    end
+    
+    I1 --> P1
+    I2 --> P1
+    P1 --> P2
+    P2 --> O1
+    O1 --> O2
+```
+
+---
 
 ## ✨ Features
 
-{chr(10).join(f"- Feature {i+1}: [Description] - `{func}()`" for i, func in enumerate(code_analysis.get('all_functions', [])[:10]))}
+{funcs_list}
+
+---
 
 ## 🚀 Installation
 
 ```bash
+# Clone repository
 git clone [url]
 cd {repo_name}
+
+# Install dependencies (actual requirements file)
 pip install -r requirements.txt
 ```
 
+---
+
 ## 📘 Usage
+
+### Basic Usage
 
 ```python
 # ACTUAL usage from repository
-[real code examples]
+from [actual_module] import [actual_class]
+
+# Real example with actual function names
+[actual code example]
 ```
+
+### Advanced Usage
+
+```python
+# More complex example from actual code
+[real advanced example]
+```
+
+---
+
+## 🔄 Data Flow
+
+```mermaid
+sequenceDiagram
+    participant U as User
+    participant I as Input Handler
+    participant P as Processor
+    participant O as Output
+    
+    U->>I: Provide input
+    I->>I: Validate
+    I->>P: Process data
+    P->>P: Execute logic
+    P->>O: Generate output
+    O->>U: Return result
+```
+
+---
 
 ## 📂 Code Structure
 
-[Show actual structure with real files and their purposes]
+```
+{repo_name}/
+├── [actual_file_1.py]     # [Purpose from analysis]
+│   ├── [actual_function_1]()  # [What it does]
+│   ├── [actual_function_2]()  # [What it does]
+│   └── [ActualClass]          # [What it does]
+├── [actual_file_2.py]     # [Purpose from analysis]
+│   └── [actual_function_3]()  # [What it does]
+└── [actual_file_3.py]     # [Purpose from analysis]
+```
+
+### File Descriptions
+
+#### `[actual_main_file.py]`
+**Purpose:** [Detailed explanation]
+
+**Key Components:**
+- `[actual_function]()`: [Detailed description with parameters and return values]
+- `[ActualClass]`: [What it does, key methods]
+
+**Code Example:**
+```python
+# Real code from this file
+[actual code snippet]
+```
+
+---
+
+## ⚙️ Configuration
+
+### Environment Variables
+```bash
+# Actual environment variables from code
+[REAL_VAR_1]=[description]
+[REAL_VAR_2]=[description]
+```
+
+### Configuration Files
+- `[actual_config_file]`: [What it configures]
+
+---
+
+## 🧪 Testing
+
+```bash
+# Run tests (actual command)
+python -m pytest [actual_test_dir]
+```
+
+---
+
+## 🤝 Contributing
+
+[Standard contributing guidelines]
+
+---
+
+## 📄 License
+
+[License information if available]
+
+---
+
+*Comprehensive documentation with architecture and flow diagrams*
 """
 
     # ========================================================================
@@ -2140,6 +2840,9 @@ CURRENT DOCUMENTATION:
    ✅ All major features are documented
    ✅ Configuration is explained
    ✅ API endpoints (if any) are all listed
+   ✅ Architecture diagrams are included
+   ✅ Data flow diagrams are included
+   ✅ Code structure section is detailed
 
 3. **Quality Standards**
    ✅ Explanations are clear and detailed
@@ -2162,8 +2865,11 @@ CURRENT DOCUMENTATION:
 4. Ensure all diagrams render correctly
 5. Add "Quick Start" if missing
 6. Verify technical accuracy of all claims
+7. Ensure architecture diagrams show actual components
+8. Verify data flow matches actual code flow
+9. Ensure code structure section lists real files
 
-Return ENHANCED, PRODUCTION-READY documentation."""
+Return ENHANCED, PRODUCTION-READY documentation with proper diagrams."""
 
         try:
             print("🤖 Reviewing and enhancing...")
@@ -2197,6 +2903,12 @@ Return ENHANCED, PRODUCTION-READY documentation."""
             code_analysis = state.get('code_analysis', {})
             project_type = state.get('project_type', 'Unknown')
             
+            # Create language distribution list safely
+            lang_dist = '\n'.join(
+                f"- `{ext}`: {count} file(s)" 
+                for ext, count in sorted(structure.get('by_extension', {}).items(), key=lambda x: x[1], reverse=True)[:10]
+            )
+            
             # Create comprehensive documentation
             full_doc = f"""{state['final_documentation']}
 
@@ -2220,12 +2932,12 @@ Return ENHANCED, PRODUCTION-READY documentation."""
 - Test Files: {len(code_analysis.get('test_files', []))}
 
 **Language Distribution:**
+{lang_dist}
 """
-            for ext, count in sorted(structure.get('by_extension', {}).items(), key=lambda x: x[1], reverse=True)[:10]:
-                full_doc += f"\n- `{ext}`: {count} file(s)"
             
             if code_analysis.get('decorators_used'):
-                full_doc += f"\n\n**Decorators Used:** {', '.join(sorted(code_analysis['decorators_used'])[:10])}"
+                decorators = ', '.join(sorted(code_analysis['decorators_used'])[:10])
+                full_doc += f"\n\n**Decorators Used:** {decorators}"
             
             full_doc += f"""
 
@@ -2236,14 +2948,15 @@ Return ENHANCED, PRODUCTION-READY documentation."""
 - [Overview](#overview)
 - [Installation](#installation)
 - [Usage](#usage)
-- [API Reference](#api-endpoints) (if applicable)
+- [Architecture](#architecture)
 - [Code Structure](#code-structure)
+- [API Reference](#api-endpoints) (if applicable)
 
 ---
 
 *📅 Documentation Version: 3.0*  
-*🤖 AI-Powered Documentation Generator with Enhanced Prompts*  
-*⭐ Production-Ready, Project-Specific Documentation*  
+*🤖 AI-Powered Documentation Generator with Enhanced Analysis*  
+*⭐ Production-Ready with Architecture & Flow Diagrams*  
 *🎯 Project Type: {project_type}*
 """
             
@@ -2295,7 +3008,7 @@ This repository contains {structure['total_files']} files implementing a {projec
 - Tests: {len(code_analysis.get('test_files', []))}
 
 ## Key Components
-{chr(10).join(f"- {func}" for func in code_analysis.get('all_functions', [])[:20])}
+{self._format_list(code_analysis.get('all_functions', [])[:20])}
 """
     
     def _generate_comprehensive_fallback_docs(self, state: DocumentationState) -> str:
@@ -2303,6 +3016,8 @@ This repository contains {structure['total_files']} files implementing a {projec
         structure = state.get('file_structure', {})
         code_analysis = state.get('code_analysis', {})
         project_type = state.get('project_type', 'Unknown')
+        
+        funcs_list = '\n'.join(f"- `{func}()`" for func in code_analysis.get('all_functions', [])[:15])
         
         return f"""# {state['repo_name']} - Documentation
 
@@ -2322,7 +3037,7 @@ This repository contains {structure['total_files']} files implementing a {projec
 ## ✨ Features
 
 Based on code analysis:
-{chr(10).join(f"- {func}()" for func in code_analysis.get('all_functions', [])[:15])}
+{funcs_list}
 
 ## 🚀 Installation
 
@@ -2376,7 +3091,8 @@ def calculate_repo_hash(file_contents: Dict[str, str]) -> str:
 
 def create_documentation_workflow():
     """Create and configure documentation workflow"""
-    gen = DocumentationGenerator(GROQ_API_KEY)
+    # gen = DocumentationGenerator(GROQ_API_KEY)
+    gen = DocumentationGenerator()
     workflow = StateGraph(DocumentationState)
     
     workflow.add_node("analyze", gen.analyze_repository_structure)
@@ -2414,8 +3130,9 @@ def process_repository(repo_path: str, repo_name: str = None, metadata_file="rep
         except:
             metadata = {}
 
-    gen = DocumentationGenerator(GROQ_API_KEY)
-    
+    # gen = DocumentationGenerator(GROQ_API_KEY)
+    gen = DocumentationGenerator()
+
     print(f"📂 Reading repository files...")
     file_contents = gen.read_repository_files(repo_path)
     
@@ -2489,7 +3206,7 @@ def process_all_repositories(base_path="data/github_repos"):
     """Process all repositories with enhanced documentation"""
     print("\n" + "="*70)
     print("🚀 ENHANCED DOCUMENTATION GENERATOR v3.0")
-    print("✨ With Improved Prompts & Project-Type Detection")
+    print("✨ With Architecture Diagrams & Improved Prompts")
     print("="*70 + "\n")
     
     base = Path(base_path)
@@ -2572,7 +3289,9 @@ if __name__ == "__main__":
     print("   ✅ Intelligent project type detection")
     print("   ✅ Project-specific documentation templates")
     print("   ✅ Real code extraction and examples")
+    print("   ✅ Architecture & flow diagrams (Mermaid)")
     print("   ✅ Enhanced prompts for better accuracy")
+    print("   ✅ Detailed code structure sections")
     print("   ✅ ML, API, CLI, Data Analysis support")
     print("\n📖 Usage:")
     print("   from utils.doc_utils import process_all_repositories")
@@ -2581,4 +3300,3 @@ if __name__ == "__main__":
     print("   from utils.doc_utils import process_single_repo")
     print("   process_single_repo('path/to/repo')")
     print("=" * 70)
-
